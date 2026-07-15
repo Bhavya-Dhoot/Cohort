@@ -4,6 +4,8 @@ export * from "./worktree/index.js";
 export * from "./model-catalog/index.js";
 export * from "./events/index.js";
 export * from "./tasks/index.js";
+export * from "./memory/index.js";
+export * from "./checks/index.js";
 export * from "./budget/index.js";
 export * from "./verify/index.js";
 export * from "./opencode-client/types.js";

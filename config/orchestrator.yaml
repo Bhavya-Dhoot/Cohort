@@ -22,3 +22,26 @@ worktree:
   # null = sibling of the project directory:
   # ..\<project>-agentic-worktrees\<runId>\<workerId>
   baseDir: null
+
+# Named multi-command check suites, run via checks/runCheckSuite (wraps
+# verify/runVerification per command). These are sensible defaults for a
+# JS/TS target project; a real project overrides them via
+# <project>\.agentic-os\config\orchestrator.yaml.
+checks:
+  suites:
+    quick:
+      - name: typecheck
+        command: "npm run typecheck"
+        timeoutMs: 120000
+    full:
+      - name: typecheck
+        command: "npm run typecheck"
+        timeoutMs: 120000
+      - name: test
+        command: "npm test"
+        timeoutMs: 300000
+  # Which suite each pipeline phase runs by default.
+  usage:
+    verify: quick
+    integration: full
+    regression: full

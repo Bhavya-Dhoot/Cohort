@@ -31,7 +31,33 @@ export const OrchestratorFileSchema = z.object({
   worktree: z.object({
     /** null means "sibling of the project directory". */
     baseDir: z.string().nullable()
-  })
+  }),
+  /**
+   * Named multi-command check suites (lint/typecheck/test/etc.), consumed by
+   * `checks/runCheckSuite`. Optional so configs/tests without a `checks` key
+   * still validate — a project that omits it simply has no named suites.
+   */
+  checks: z
+    .object({
+      suites: z.record(
+        z.string(),
+        z.array(
+          z.object({
+            name: z.string(),
+            command: z.string(),
+            timeoutMs: z.number().int().positive().optional()
+          })
+        )
+      ),
+      usage: z
+        .object({
+          verify: z.string().optional(),
+          integration: z.string().optional(),
+          regression: z.string().optional()
+        })
+        .optional()
+    })
+    .optional()
 });
 export type OrchestratorFile = z.infer<typeof OrchestratorFileSchema>;
 

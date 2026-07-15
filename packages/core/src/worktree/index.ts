@@ -6,6 +6,18 @@ export { createWorktree } from "./create.js";
 export { listWorktrees } from "./list.js";
 export { removeWorktree } from "./remove.js";
 export { mergeBranch } from "./merge.js";
+export {
+  integrationBranchName,
+  ensureIntegrationBranch,
+  mergeInDagOrder
+} from "./integration.js";
+export type {
+  EnsureIntegrationBranchOptions,
+  EnsureIntegrationBranchResult,
+  MergeInDagOrderOptions,
+  MergeOutcome,
+  MergeInDagOrderResult
+} from "./integration.js";
 export type {
   WorktreeInfo,
   CreateWorktreeOptions,
