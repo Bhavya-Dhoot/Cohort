@@ -6,3 +6,5 @@ export * from "./tasks/index.js";
 export * from "./budget/index.js";
 export * from "./verify/index.js";
 export * from "./opencode-client/types.js";
+export * from "./opencode-client/client.js";
+export * from "./worker/index.js";

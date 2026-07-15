@@ -1,0 +1,370 @@
+import { randomBytes } from "node:crypto";
+import { mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createWorkerSupervisor } from "../../src/worker/index.js";
+import type { WorkerMeta, WorkerState, WorkerSupervisor } from "../../src/worker/index.js";
+import { OpencodeTransportError } from "../../src/opencode-client/types.js";
+import type { OpencodeClient, PromptResult } from "../../src/opencode-client/types.js";
+import { runGit } from "../../src/worktree/index.js";
+
+let root: string;
+let repoDir: string;
+let worktreesDir: string;
+let stateDir: string;
+
+async function pathExists(path: string): Promise<boolean> {
+  try {
+    await stat(path);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+beforeEach(async () => {
+  root = join(tmpdir(), `agentic-os-worker-test-${randomBytes(6).toString("hex")}`);
+  repoDir = join(root, "repo");
+  worktreesDir = join(root, "worktrees");
+  stateDir = join(root, "state");
+  await mkdir(repoDir, { recursive: true });
+
+  await runGit(["init", "-b", "main"], repoDir);
+  await runGit(["config", "user.email", "test@example.com"], repoDir);
+  await runGit(["config", "user.name", "Test User"], repoDir);
+  // Pin line-ending handling so fixture content is byte-identical regardless
+  // of the host's global core.autocrlf (Windows commonly defaults it true).
+  await runGit(["config", "core.autocrlf", "false"], repoDir);
+
+  await writeFile(join(repoDir, "README.md"), "hello\n", "utf8");
+  await runGit(["add", "README.md"], repoDir);
+  await runGit(["commit", "-m", "initial commit"], repoDir);
+});
+
+afterEach(async () => {
+  await rm(root, { recursive: true, force: true });
+});
+
+/** A fully-stubbed OpencodeClient; pass `overrides` to replace individual methods per test. */
+function createMockClient(overrides: Partial<OpencodeClient> = {}): OpencodeClient {
+  const base: OpencodeClient = {
+    async ensureServer() {
+      return { baseUrl: "http://127.0.0.1:4096", pid: 1234, spawned: true };
+    },
+    async ping() {
+      return true;
+    },
+    async createSession(_baseUrl, opts) {
+      return { id: `session-${randomBytes(4).toString("hex")}`, directory: opts.directory };
+    },
+    async prompt(): Promise<PromptResult> {
+      return { outcome: "completed", eventCount: 0 };
+    },
+    async abort() {
+      // no-op default
+    },
+    async getSessionStatus() {
+      return { id: "s", state: "idle" };
+    },
+    async getUsage() {
+      return {};
+    }
+  };
+  return { ...base, ...overrides };
+}
+
+async function waitForState(
+  supervisor: WorkerSupervisor,
+  workerId: string,
+  states: WorkerState[],
+  timeoutMs = 3000
+): Promise<WorkerMeta> {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const meta = await supervisor.status(workerId);
+    if (states.includes(meta.state)) {
+      return meta;
+    }
+    if (Date.now() > deadline) {
+      throw new Error(
+        `Timed out waiting for worker '${workerId}' to reach one of [${states.join(", ")}]; last state '${meta.state}'`
+      );
+    }
+    await new Promise((resolve) => setTimeout(resolve, 15));
+  }
+}
+
+describe("happy path", () => {
+  it("spawn -> completed -> verify -> verified -> finalize merge -> merged + worktree gone", async () => {
+    const client = createMockClient({
+      prompt: vi.fn(async (_baseUrl, _sessionId, _text, opts) => {
+        opts?.onEvent?.({ ts: Date.now(), kind: "message", summary: "did the work" });
+        return { outcome: "completed", eventCount: 1 };
+      })
+    });
+
+    const supervisor = createWorkerSupervisor({
+      client,
+      stateDir,
+      repoDir,
+      worktreeBaseDir: worktreesDir,
+      runId: "run-happy"
+      // defaults.baseRef intentionally omitted: exercises resolveBaseRef's
+      // git-based fallback and finalize's default-to-baseRef merge target.
+    });
+
+    const spawned = await supervisor.spawn({ taskId: "task-1", prompt: "do the thing" });
+    expect(spawned.state).toBe("running");
+    expect(spawned.worktreePath).toBeDefined();
+    expect(spawned.baseRef).toBe("main");
+
+    const completed = await waitForState(supervisor, spawned.workerId, ["completed"]);
+    expect(completed.state).toBe("completed");
+    expect(completed.usage).toBeDefined();
+
+    // Simulate the OpenCode worker having made an uncommitted edit.
+    await writeFile(join(completed.worktreePath!, "output.txt"), "hello from worker\n", "utf8");
+
+    const collectedBefore = await supervisor.collect(spawned.workerId);
+    expect(collectedBefore.filesChanged).toContain("output.txt");
+
+    const verified = await supervisor.verify(spawned.workerId, `node -e "process.exit(0)"`);
+    expect(verified.state).toBe("verified");
+    expect(verified.verify?.passed).toBe(true);
+    expect(verified.verify?.exitCode).toBe(0);
+
+    const merged = await supervisor.finalize(spawned.workerId, "merge");
+    expect(merged.state).toBe("merged");
+    expect(merged.merge?.merged).toBe(true);
+    expect(merged.merge?.mergeSha).toMatch(/^[0-9a-f]{40}$/);
+    expect(await pathExists(completed.worktreePath!)).toBe(false);
+
+    const mergedFile = await readFile(join(repoDir, "output.txt"), "utf8");
+    expect(mergedFile).toBe("hello from worker\n");
+  });
+});
+
+describe("verify-fail path", () => {
+  it("verification_failed then discard removes the worktree", async () => {
+    const client = createMockClient();
+    const supervisor = createWorkerSupervisor({
+      client,
+      stateDir,
+      repoDir,
+      worktreeBaseDir: worktreesDir,
+      runId: "run-vf",
+      defaults: { baseRef: "main" }
+    });
+
+    const spawned = await supervisor.spawn({ taskId: "task-2", prompt: "do the thing" });
+    const completed = await waitForState(supervisor, spawned.workerId, ["completed"]);
+
+    const failedVerify = await supervisor.verify(spawned.workerId, `node -e "process.exit(1)"`);
+    expect(failedVerify.state).toBe("verification_failed");
+    expect(failedVerify.verify?.passed).toBe(false);
+    expect(failedVerify.lastError?.classification).toBe("logic");
+
+    const discarded = await supervisor.finalize(spawned.workerId, "discard");
+    expect(discarded.state).toBe("discarded");
+    expect(await pathExists(completed.worktreePath!)).toBe(false);
+  });
+});
+
+describe("timeout", () => {
+  it("times out a hanging prompt and calls client.abort", async () => {
+    const abortMock = vi.fn(async () => {});
+    const client = createMockClient({
+      prompt: vi.fn(() => new Promise<PromptResult>(() => {})), // never resolves
+      abort: abortMock
+    });
+
+    const supervisor = createWorkerSupervisor({
+      client,
+      stateDir,
+      repoDir,
+      worktreeBaseDir: worktreesDir,
+      runId: "run-timeout",
+      defaults: { baseRef: "main", timeoutMs: 100 }
+    });
+
+    const spawned = await supervisor.spawn({ taskId: "task-3", prompt: "hang forever" });
+    expect(spawned.state).toBe("running");
+
+    const timedOut = await waitForState(supervisor, spawned.workerId, ["timeout"], 3000);
+    expect(timedOut.state).toBe("timeout");
+    expect(timedOut.lastError?.classification).toBe("logic");
+    expect(abortMock).toHaveBeenCalledTimes(1);
+  }, 10_000);
+});
+
+describe("infra retry", () => {
+  it("retries infra failures with backoff and eventually reaches running", async () => {
+    let attempt = 0;
+    const client = createMockClient({
+      createSession: vi.fn(async (_baseUrl, opts) => {
+        attempt += 1;
+        if (attempt <= 2) {
+          throw new OpencodeTransportError("ECONNRESET");
+        }
+        return { id: "session-ok", directory: opts.directory };
+      })
+    });
+
+    const supervisor = createWorkerSupervisor({
+      client,
+      stateDir,
+      repoDir,
+      worktreeBaseDir: worktreesDir,
+      runId: "run-retry",
+      defaults: { baseRef: "main", infraBackoffMs: [1, 1, 1] }
+    });
+
+    const spawned = await supervisor.spawn({ taskId: "task-4", prompt: "flaky" });
+    expect(spawned.state).toBe("running");
+    expect(spawned.attempts.infra).toBe(2);
+
+    // Let the background prompt lifecycle (default mock: resolves
+    // "completed") settle before the fixture tears down its tmp dir.
+    await waitForState(supervisor, spawned.workerId, ["completed"]);
+  });
+
+  it("exhausts infra retries and lands on failed/infra", async () => {
+    const client = createMockClient({
+      createSession: vi.fn(async () => {
+        throw new OpencodeTransportError("down");
+      })
+    });
+
+    const supervisor = createWorkerSupervisor({
+      client,
+      stateDir,
+      repoDir,
+      worktreeBaseDir: worktreesDir,
+      runId: "run-exhaust",
+      defaults: { baseRef: "main", infraRetryMax: 1, infraBackoffMs: [1] }
+    });
+
+    const spawned = await supervisor.spawn({ taskId: "task-5", prompt: "always fails" });
+    expect(spawned.state).toBe("failed");
+    expect(spawned.lastError?.classification).toBe("infra");
+  });
+});
+
+describe("reconcile", () => {
+  it("marks workers crashed mid-spawn as orphaned", async () => {
+    const workerId = "crashed-1";
+    const crashedMeta: WorkerMeta = {
+      workerId,
+      runId: "run-orphan",
+      taskId: "t",
+      state: "session_starting",
+      prompt: "p",
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+      attempts: { infra: 0 }
+    };
+    await mkdir(join(stateDir, "workers", workerId), { recursive: true });
+    await writeFile(join(stateDir, "workers", workerId, "meta.json"), JSON.stringify(crashedMeta), "utf8");
+
+    const supervisor = createWorkerSupervisor({
+      client: createMockClient(),
+      stateDir,
+      repoDir,
+      worktreeBaseDir: worktreesDir,
+      runId: "run-orphan"
+    });
+    const changed = await supervisor.reconcile();
+
+    expect(changed).toHaveLength(1);
+    expect(changed[0]?.state).toBe("orphaned");
+
+    const reloaded = await supervisor.status(workerId);
+    expect(reloaded.state).toBe("orphaned");
+  });
+
+  it("flips a running worker with an idle session to completed via status()", async () => {
+    const workerId = "running-1";
+    const runningMeta: WorkerMeta = {
+      workerId,
+      runId: "run-orphan2",
+      taskId: "t",
+      state: "running",
+      prompt: "p",
+      baseUrl: "http://127.0.0.1:4096",
+      sessionId: "s1",
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+      attempts: { infra: 0 }
+    };
+    await mkdir(join(stateDir, "workers", workerId), { recursive: true });
+    await writeFile(join(stateDir, "workers", workerId, "meta.json"), JSON.stringify(runningMeta), "utf8");
+
+    // Fresh supervisor instance -> no in-flight promise tracked for this
+    // worker, i.e. exactly the post-restart case status() must reconcile.
+    const client = createMockClient({
+      getSessionStatus: vi.fn(async () => ({ id: "s1", state: "idle" }))
+    });
+    const supervisor = createWorkerSupervisor({
+      client,
+      stateDir,
+      repoDir,
+      worktreeBaseDir: worktreesDir,
+      runId: "run-orphan2"
+    });
+
+    const status = await supervisor.status(workerId);
+    expect(status.state).toBe("completed");
+  });
+});
+
+describe("illegal transitions", () => {
+  it("throws when verifying a worker that is still running", async () => {
+    const client = createMockClient({
+      prompt: vi.fn(() => new Promise<PromptResult>(() => {}))
+    });
+    const supervisor = createWorkerSupervisor({
+      client,
+      stateDir,
+      repoDir,
+      worktreeBaseDir: worktreesDir,
+      runId: "run-illegal",
+      defaults: { baseRef: "main", timeoutMs: 60_000 }
+    });
+
+    const spawned = await supervisor.spawn({ taskId: "task-6", prompt: "still running" });
+    expect(spawned.state).toBe("running");
+
+    await expect(supervisor.verify(spawned.workerId, `node -e "process.exit(0)"`)).rejects.toThrow(
+      /illegal from state 'running'/
+    );
+  });
+});
+
+describe("persistence across restart", () => {
+  it("meta.json survives a fresh supervisor instance pointed at the same stateDir", async () => {
+    const client = createMockClient();
+    const supervisorA = createWorkerSupervisor({
+      client,
+      stateDir,
+      repoDir,
+      worktreeBaseDir: worktreesDir,
+      runId: "run-persist",
+      defaults: { baseRef: "main" }
+    });
+
+    const spawned = await supervisorA.spawn({ taskId: "task-7", prompt: "persist me" });
+    await waitForState(supervisorA, spawned.workerId, ["completed"]);
+
+    const supervisorB = createWorkerSupervisor({
+      client,
+      stateDir,
+      repoDir,
+      worktreeBaseDir: worktreesDir,
+      runId: "run-persist"
+    });
+    const reloaded = await supervisorB.status(spawned.workerId);
+    expect(reloaded.state).toBe("completed");
+    expect(reloaded.workerId).toBe(spawned.workerId);
+  });
+});
