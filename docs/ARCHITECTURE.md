@@ -242,12 +242,18 @@ flowchart TD
   decouples worker liveness from the Claude Code / MCP process: a crash or
   restart of Claude Code does not kill running workers.
 - **Crash reconciliation.** On MCP restart: probe the recorded PID
-  (`tasklist`, since POSIX `kill -0` isn't available on Windows), confirm
-  it's the right process via `GET /doc`, then reconcile previously
-  `RUNNING` workers against live OpenCode session status. If `serve` is
-  gone, every `RUNNING` worker is marked `ORPHANED` — infra-classified,
-  since a dead server says nothing about whether the worker's approach was
-  right.
+  (`process.kill(pid, 0)` — verified to work as a liveness check on
+  Windows), confirm the server responds via `GET /global/health`, then
+  reconcile previously `RUNNING` workers against live OpenCode session
+  status. If `serve` is gone, every `RUNNING` worker is marked `ORPHANED`
+  — infra-classified, since a dead server says nothing about whether the
+  worker's approach was right.
+- **Live-verified API facts (opencode 1.15.13, from `GET /doc`):** sync
+  prompt is a long-lived blocking `POST /session/{id}/message`; session
+  busy/idle state comes from `GET /session/status`, a map that omits idle
+  sessions entirely; `Session` objects carry `cost`/`tokens`/`summary`
+  directly. Full discovery notes:
+  `packages/core/src/opencode-client/docs-notes.md`.
 
 ## MCP tool surface (M1, 8 tools)
 
