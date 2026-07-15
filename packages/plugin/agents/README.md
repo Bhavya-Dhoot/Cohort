@@ -6,11 +6,14 @@ Dedicated Claude Code subagent definitions for the review step in
 `style.md`, `documentation.md`, `accessibility.md`.
 
 **Read-only guarantee:** every reviewer's frontmatter declares
-`tools: Read, Grep, Glob` and nothing else — no `Edit`, `Write`,
-`NotebookEdit`, or `Bash`. This is enforced by the tool allowlist itself, not
-by prompt convention: a reviewer structurally cannot change a worker's diff,
-only inspect it and record a verdict via the `review_verdict` MCP tool
-(`pass` / `revise` / `block` with file-anchored `findings`).
+`tools: Read, Grep, Glob, mcp__agentic-os__review_verdict` — read access to
+the codebase plus the one MCP tool needed to write a verdict, and nothing
+else: no `Edit`, `Write`, `NotebookEdit`, or `Bash`. This is enforced by the
+tool allowlist itself, not by prompt convention: a reviewer structurally
+cannot change a worker's diff, only inspect it (`Read`/`Grep`/`Glob`) and
+record a verdict via `review_verdict` (`pass` / `revise` / `block` with
+file-anchored `findings`). Reviewers never write production code — the
+allowlist gives them no tool capable of it.
 
 **Extension point:** adding a reviewer discipline means adding one file here
 — `<reviewerId>.md`, frontmatter `name` matching the id

@@ -247,6 +247,85 @@ describe("plan_submit", () => {
       await close();
     }
   });
+
+  it("an orgChart node and a task referencing undeclared domains are rejected with isError and issues, writing nothing", async () => {
+    const { client: mcp, close } = await setupServer(createMockClient());
+    try {
+      const tasks = [
+        { id: "task-a", title: "A", prompt: "a", dependsOn: [], fileOwnership: ["a/**"], domain: "shipping" },
+        { id: "task-b", title: "B", prompt: "b", dependsOn: [], fileOwnership: ["b/**"] }
+      ];
+      const orgChart = {
+        root: {
+          role: "CEO",
+          kind: "executive",
+          children: [{ role: "Domain Lead: Billing", kind: "domain-lead", domain: "billing" }]
+        },
+        generatedFor: "build with undeclared domains"
+      };
+      const res = await callTool(mcp, "plan_submit", {
+        objective: "build with undeclared domains",
+        tasks,
+        domains: [{ id: "auth", name: "Auth" }],
+        orgChart
+      });
+      expect(res.isError).toBe(true);
+      expect(res.data.valid).toBe(false);
+      expect(res.data.issues.length).toBeGreaterThanOrEqual(2);
+      expect(res.data.issues.some((i: string) => i.includes("billing"))).toBe(true);
+      expect(res.data.issues.some((i: string) => i.includes("shipping"))).toBe(true);
+
+      const runId = await readRunId(projectDir);
+      expect(await pathExists(join(projectDir, ".agentic-os", "runs", runId, "task-board.json"))).toBe(false);
+      expect(await pathExists(join(projectDir, ".agentic-os", "runs", runId, "plan.json"))).toBe(false);
+    } finally {
+      await close();
+    }
+  });
+
+  it("a valid org plan (domains + orgChart consistent) passes and persists plan.json with domains/orgChart", async () => {
+    const { client: mcp, close } = await setupServer(createMockClient());
+    try {
+      const tasks = [
+        { id: "task-a", title: "A", prompt: "a", dependsOn: [], fileOwnership: ["a/**"], domain: "auth" },
+        { id: "task-b", title: "B", prompt: "b", dependsOn: [], fileOwnership: ["b/**"] }
+      ];
+      const orgChart = {
+        root: {
+          role: "CEO",
+          kind: "executive",
+          children: [{ role: "Domain Lead: Auth", kind: "domain-lead", domain: "auth" }]
+        },
+        generatedFor: "build with a consistent org"
+      };
+      const res = await callTool(mcp, "plan_submit", {
+        objective: "build with a consistent org",
+        tasks,
+        domains: [{ id: "auth", name: "Auth" }],
+        orgChart
+      });
+      expect(res.isError).toBeFalsy();
+      expect(res.data).toMatchObject({ taskCount: 2, valid: true });
+
+      const runId = await readRunId(projectDir);
+      const plan = JSON.parse(await readFile(join(projectDir, ".agentic-os", "runs", runId, "plan.json"), "utf8"));
+      expect(plan.domains).toEqual([{ id: "auth", name: "Auth" }]);
+      expect(plan.orgChart).toEqual(orgChart);
+    } finally {
+      await close();
+    }
+  });
+
+  it("an M2-style plan with no domains/orgChart still passes (validateOrgReferences is a no-op)", async () => {
+    const { client: mcp, close } = await setupServer(createMockClient());
+    try {
+      const res = await callTool(mcp, "plan_submit", { objective: "build the thing", tasks: disjointTasks() });
+      expect(res.isError).toBeFalsy();
+      expect(res.data).toMatchObject({ taskCount: 3, valid: true });
+    } finally {
+      await close();
+    }
+  });
 });
 
 // ---------------------------------------------------------------------------

@@ -79,7 +79,14 @@ import {
 } from "../tasks/index.js";
 import { openMemoryStore, type MemoryStore } from "../memory/index.js";
 import { resolveSuiteName, runCheckSuite, type CheckSuiteResult } from "../checks/index.js";
-import { PlanSchema, type Batch, type ReplanRecord, type Domain, type OrgChart } from "../plan/index.js";
+import {
+  PlanSchema,
+  validateOrgReferences,
+  type Batch,
+  type ReplanRecord,
+  type Domain,
+  type OrgChart
+} from "../plan/index.js";
 import {
   openReviewStore,
   ReviewFindingSchema,
@@ -1452,6 +1459,25 @@ async function planSubmitHandler(ctx: ServerCtx, input: PlanSubmitInput): Promis
     };
   }
 
+  // Org-consistency gate: every org node / task `domain` must reference an
+  // id actually declared in `domains`. Must run (and fail closed) before any
+  // persistence below -- otherwise an inconsistent orgChart silently becomes
+  // the run's persisted planning artifact (see validateOrgReferences' doc
+  // comment in plan/schema.ts).
+  const orgRefs = validateOrgReferences({
+    objective: input.objective,
+    tasks: input.tasks,
+    contracts: input.contracts,
+    domains: input.domains,
+    orgChart: input.orgChart
+  });
+  if (!orgRefs.valid) {
+    return {
+      isError: true,
+      payload: { valid: false, taskCount: cards.length, issues: orgRefs.issues }
+    };
+  }
+
   const planId = randomBytes(4).toString("hex");
   await atomicWriteJson(join(ctx.runDir, "plan.json"), {
     planId,
@@ -2044,6 +2070,13 @@ async function specialistHandler(ctx: ServerCtx, input: SpecialistToolInput): Pr
       if (!input.agentId || !input.role || !input.description || !input.systemPrompt) {
         throw new Error("'agentId', 'role', 'description', and 'systemPrompt' are required for action 'generate'");
       }
+      // Narrowed locals: TS's guard-narrowing above doesn't survive into the
+      // nested runSerialized closure below (a re-read of `input.agentId` etc.
+      // there would widen back to `string | undefined`).
+      const agentId = input.agentId;
+      const role = input.role;
+      const description = input.description;
+      const systemPrompt = input.systemPrompt;
 
       // Budget, not a default: refuse to create another specialist once
       // max_concurrent_specialists are already live, rather than letting the
@@ -2051,36 +2084,45 @@ async function specialistHandler(ctx: ServerCtx, input: SpecialistToolInput): Pr
       // agentId's path-safety (specialist/index.ts's assertValidAgentId) --
       // that error path is left to bubble to runTool's catch-all below,
       // same as review_verdict above.
-      const cap = ctx.config.agents.max_concurrent_specialists;
-      const existing = await listSpecialists(ctx.projectDir);
-      if (existing.length >= cap) {
-        return {
-          isError: true,
-          payload: {
-            error:
-              `Refusing to generate specialist '${input.agentId}': config.agents.max_concurrent_specialists ` +
-              `(${cap}) already reached (${existing.length} active). Retire one first.`
-          }
-        };
-      }
+      //
+      // The cap check (list) and the write (generateSpecialist) are a
+      // read-then-write critical section over an aggregate count across all
+      // specialists, so -- like every other cap/counter in this file --
+      // they're serialized under a single global key: two concurrent
+      // 'generate' calls must not both observe a stale `existing.length`
+      // and both pass the cap check.
+      return runSerialized(ctx, "specialist-generate", async () => {
+        const cap = ctx.config.agents.max_concurrent_specialists;
+        const existing = await listSpecialists(ctx.projectDir);
+        if (existing.length >= cap) {
+          return {
+            isError: true,
+            payload: {
+              error:
+                `Refusing to generate specialist '${agentId}': config.agents.max_concurrent_specialists ` +
+                `(${cap}) already reached (${existing.length} active). Retire one first.`
+            }
+          };
+        }
 
-      const spec: SpecialistSpec = {
-        agentId: input.agentId,
-        role: input.role,
-        description: input.description,
-        systemPrompt: input.systemPrompt,
-        mode: input.mode,
-        model: input.model,
-        temperature: input.temperature,
-        steps: input.steps,
-        permission: input.permission
-      };
-      const result = await generateSpecialist({
-        projectDir: ctx.projectDir,
-        spec,
-        denyFloor: ctx.config.agents.default_permission.deny
+        const spec: SpecialistSpec = {
+          agentId,
+          role,
+          description,
+          systemPrompt,
+          mode: input.mode,
+          model: input.model,
+          temperature: input.temperature,
+          steps: input.steps,
+          permission: input.permission
+        };
+        const result = await generateSpecialist({
+          projectDir: ctx.projectDir,
+          spec,
+          denyFloor: ctx.config.agents.default_permission.deny
+        });
+        return { payload: { agentId: result.agentId, path: result.path } };
       });
-      return { payload: { agentId: result.agentId, path: result.path } };
     }
     case "retire": {
       if (!input.agentId) {

@@ -95,8 +95,10 @@ and enforces `replan.maxIterations`: when the cap is hit it returns
 loop on the same failing task forever. Re-planned work is new task cards for
 the affected subtree only, never a verbatim retry.
 
-**Repeat** from Batch until the DAG is empty, then call `run_report` and
-summarize the outcome (tasks done, cost, anything escalated).
+**Repeat** from Batch until the DAG is empty, then summarize the outcome
+(tasks done, cost, anything escalated) in chat — a `run_report` tool for a
+rendered timeline/cost report is not part of this build and arrives in a
+later milestone.
 
 Keep shared knowledge in the `memory` tool, not in your context: write
 `mission`, `architecture`, `standards`, `contracts`, and the `decision-log`

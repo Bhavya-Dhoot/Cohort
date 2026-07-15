@@ -304,7 +304,9 @@ describe("getUsage", () => {
   it("throws OpencodeTransportError for an unknown session with no export fallback available", async () => {
     const client = createOpencodeClient();
     await expect(client.getUsage(fake.baseUrl, "ses_does_not_exist")).rejects.toThrow(OpencodeTransportError);
-  });
+    // Longer timeout: getUsage's fallback shells out to a real `opencode export`
+    // subprocess, whose spawn latency spikes under full-suite parallel load.
+  }, 30_000);
 });
 
 describe("normalizeUpstreamEvent", () => {

@@ -83,11 +83,62 @@ export interface OrgNode {
   children?: OrgNode[];
 }
 
+/**
+ * A hostile/buggy orgChart can nest `children` thousands of levels deep. A
+ * real org never nests past ~8, so 20 leaves ample headroom while still
+ * catching pathological input. This cap is enforced twice: once here, on
+ * the raw value before zod's own recursive `z.lazy` descent gets a chance
+ * to run (see `OrgNodeSchema` below), and again in `validateOrgReferences`
+ * before it calls the recursive `flattenOrg` -- both are the two places a
+ * deep tree would otherwise blow the call stack instead of failing cleanly.
+ */
+export const MAX_ORG_DEPTH = 20;
+
+/**
+ * Iterative (explicit-stack, non-recursive) max-depth of an org-node-shaped
+ * value. Deliberately walks `children` with a stack rather than recursion:
+ * the whole point is to measure depth *before* anything recursive touches
+ * the tree, so this itself must never recurse.
+ */
+function orgNodeDepth(root: unknown): number {
+  let maxDepth = 0;
+  const stack: Array<[unknown, number]> = [[root, 1]];
+  while (stack.length > 0) {
+    const [node, depth] = stack.pop() as [unknown, number];
+    if (depth > maxDepth) maxDepth = depth;
+    const children = (node as { children?: unknown } | null)?.children;
+    if (Array.isArray(children)) {
+      for (const child of children) {
+        stack.push([child, depth + 1]);
+      }
+    }
+  }
+  return maxDepth;
+}
+
 // Recursive schema: `z.lazy` defers evaluation of the object shape so it can
 // reference itself via `children`. The explicit `z.ZodType<OrgNode>`
 // annotation is required because zod can't infer a recursive type on its
 // own.
-export const OrgNodeSchema: z.ZodType<OrgNode> = z.lazy(() =>
+//
+// Wrapped in `z.preprocess` so the iterative `orgNodeDepth` check above runs
+// BEFORE zod's own recursive descent into `children`: verified empirically
+// that zod's recursive parse of this shape throws an uncaught `RangeError:
+// Maximum call stack size exceeded` around ~2000 levels of nesting rather
+// than returning a normal `safeParse` failure. Rejecting depth > MAX_ORG_DEPTH
+// up front means a pathologically deep orgChart fails as a clean, ordinary
+// validation issue instead of an opaque stack overflow.
+export const OrgNodeSchema: z.ZodType<OrgNode> = z.preprocess((value, ctx) => {
+  const depth = orgNodeDepth(value);
+  if (depth > MAX_ORG_DEPTH) {
+    ctx.addIssue({
+      code: "custom",
+      message: `orgChart nesting exceeds max depth ${MAX_ORG_DEPTH} (found depth ${depth})`
+    });
+    return z.NEVER;
+  }
+  return value;
+}, z.lazy(() =>
   z.object({
     role: z.string().min(1),
     kind: OrgNodeKindSchema,
@@ -96,7 +147,7 @@ export const OrgNodeSchema: z.ZodType<OrgNode> = z.lazy(() =>
     reviewerId: z.string().optional(),
     children: z.array(OrgNodeSchema).optional()
   })
-);
+));
 
 /**
  * The full generated org chart. `generatedFor` echoes the objective it was
@@ -153,15 +204,26 @@ export function flattenOrg(chart: OrgChart): FlatOrgNode[] {
  * `domain` must reference a domain id actually declared in `plan.domains`,
  * and every task's `domain` (if set) must do the same. Never throws — a
  * planner/`plan_submit` caller decides what to do with `issues`.
+ *
+ * Checks `orgChart` nesting depth first, iteratively, before calling
+ * `flattenOrg` (which recurses): a pathologically deep orgChart would blow
+ * the call stack inside `flattenOrg` itself, so a too-deep chart is reported
+ * as an ordinary issue and `flattenOrg` is skipped for it rather than risking
+ * that recursion.
  */
 export function validateOrgReferences(plan: Plan): { valid: boolean; issues: string[] } {
   const issues: string[] = [];
   const domainIds = new Set((plan.domains ?? []).map((d) => d.id));
 
   if (plan.orgChart) {
-    for (const node of flattenOrg(plan.orgChart)) {
-      if (node.domain !== undefined && !domainIds.has(node.domain)) {
-        issues.push(`org node "${node.role}" references undefined domain "${node.domain}"`);
+    const depth = orgNodeDepth(plan.orgChart.root);
+    if (depth > MAX_ORG_DEPTH) {
+      issues.push(`orgChart nesting exceeds max depth ${MAX_ORG_DEPTH} (found depth ${depth})`);
+    } else {
+      for (const node of flattenOrg(plan.orgChart)) {
+        if (node.domain !== undefined && !domainIds.has(node.domain)) {
+          issues.push(`org node "${node.role}" references undefined domain "${node.domain}"`);
+        }
       }
     }
   }

@@ -385,6 +385,52 @@ describe("specialist", () => {
       await close();
     }
   });
+
+  it("enforces the cap under concurrent generate calls (TOCTOU race): with one slot remaining, exactly one of two parallel calls succeeds", async () => {
+    // cap 2, 1 already live -> exactly one slot remains for the two
+    // concurrent calls below.
+    await writeConfigOverride(projectDir, "agents", "max_concurrent_specialists: 2\n");
+    const { client: mcp, close } = await setupServer(createMockClient());
+    try {
+      const seed = await callTool(mcp, "specialist", {
+        action: "generate",
+        agentId: "spec-seed",
+        role: "Seed",
+        description: "d",
+        systemPrompt: "p"
+      });
+      expect(seed.isError).toBeFalsy();
+
+      const [a, b] = await Promise.all([
+        callTool(mcp, "specialist", {
+          action: "generate",
+          agentId: "spec-a",
+          role: "Role A",
+          description: "d",
+          systemPrompt: "p"
+        }),
+        callTool(mcp, "specialist", {
+          action: "generate",
+          agentId: "spec-b",
+          role: "Role B",
+          description: "d",
+          systemPrompt: "p"
+        })
+      ]);
+
+      const results = [a, b];
+      const succeeded = results.filter((r) => !r.isError);
+      const failed = results.filter((r) => r.isError);
+      expect(succeeded).toHaveLength(1);
+      expect(failed).toHaveLength(1);
+      expect(String(failed[0]!.data.error)).toMatch(/max_concurrent_specialists/);
+
+      const listed = await callTool(mcp, "specialist", { action: "list" });
+      expect(listed.data.specialists).toHaveLength(2);
+    } finally {
+      await close();
+    }
+  });
 });
 
 // ---------------------------------------------------------------------------

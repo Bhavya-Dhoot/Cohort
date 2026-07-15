@@ -42,6 +42,21 @@ describe("ReviewFindingSchema", () => {
     expect(result.success).toBe(false);
   });
 
+  it("rejects a whitespace-only note", () => {
+    const result = ReviewFindingSchema.safeParse({ severity: "nit", note: "   " });
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects a single-character note", () => {
+    const result = ReviewFindingSchema.safeParse({ severity: "nit", note: "x" });
+    expect(result.success).toBe(false);
+  });
+
+  it("accepts a real, terse note", () => {
+    const result = ReviewFindingSchema.safeParse({ severity: "critical", note: "SQL injection" });
+    expect(result.success).toBe(true);
+  });
+
   it("rejects a non-positive line number", () => {
     const result = ReviewFindingSchema.safeParse({ severity: "nit", note: "x", line: 0 });
     expect(result.success).toBe(false);

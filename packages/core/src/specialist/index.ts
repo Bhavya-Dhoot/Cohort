@@ -14,10 +14,13 @@ import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
  * allow|ask|deny). The document body (everything after the closing `---`)
  * is the agent's system prompt.
  *
- * `role` is not an OpenCode-recognized frontmatter key; it is stashed there
- * anyway so `listSpecialists` can report it back without a second store --
- * OpenCode ignores frontmatter keys it doesn't recognize, so this is a safe
- * place to keep it.
+ * `role` and `generatedBy` are not OpenCode-recognized frontmatter keys;
+ * they are stashed there anyway so `listSpecialists` can report them back
+ * without a second store -- OpenCode ignores frontmatter keys it doesn't
+ * recognize, so this is a safe place to keep them. `generatedBy` is this
+ * module's provenance marker: `retireSpecialist` refuses to delete a file
+ * that lacks it, so a hand-authored OpenCode agent file sharing an agentId
+ * is never destroyed.
  *
  * Safety floor: `agents.yaml`'s `default_permission.deny` must appear as
  * `deny` in every generated agent's `permission` map regardless of what the
@@ -64,16 +67,29 @@ export interface RetireSpecialistOptions {
 
 export interface RetireSpecialistResult {
   removed: boolean;
+  /** Present (only) when `removed` is false because the file exists but lacks this module's `generatedBy` marker. */
+  reason?: string;
 }
 
 export interface ListedSpecialist {
   agentId: string;
   role?: string;
   path: string;
+  /** Whether the file carries this module's `generatedBy` marker, i.e. whether `retireSpecialist` would remove it. */
+  generatedByUs: boolean;
 }
 
 /** Same shape as memory's section-name rule: lowercase, digits, hyphens, <=41 chars, path-safe. */
 const AGENT_ID_RE = /^[a-z][a-z0-9-]{0,40}$/;
+
+/**
+ * Frontmatter marker value stamped by `renderAgentFile` on every file this
+ * module generates. `retireSpecialist` checks for this before deleting, so
+ * it never removes a hand-authored `.opencode/agent/*.md` file that happens
+ * to share an agentId -- `.opencode/agent/` is OpenCode's own directory,
+ * not one exclusively owned by this system.
+ */
+const GENERATED_BY = "agentic-os";
 
 function assertValidAgentId(agentId: string): void {
   if (!AGENT_ID_RE.test(agentId)) {
@@ -105,12 +121,37 @@ function assertContained(projectDir: string, filePath: string): void {
   }
 }
 
-/** Denies from `denyFloor` are applied last, so they override any `allow`/`ask` the spec set for the same key. */
+/**
+ * True if `pattern` (a `denyFloor` entry) covers `key` (a spec permission
+ * key): either the same literal string, or `pattern` is a `<literal>*`
+ * prefix glob whose literal part is a prefix of `key`. This is a minimal
+ * prefix-glob match, not a full glob library -- it's sufficient because
+ * every `denyFloor` entry is shaped that way (see `agents.yaml`'s
+ * `default_permission.deny`), but it does not handle a wildcard on the
+ * spec's side (e.g. spec key `"git *"` is not recognized as covering/being
+ * covered by floor `"git push*"`).
+ */
+function isCoveredByFloor(key: string, pattern: string): boolean {
+  if (pattern === key) return true;
+  return pattern.endsWith("*") && key.startsWith(pattern.slice(0, -1));
+}
+
+/**
+ * Denies from `denyFloor` always win. Any spec permission key that a floor
+ * glob covers (per `isCoveredByFloor`) is dropped before the floor is
+ * applied -- otherwise a spec key like `"git push"` would coexist with the
+ * floor's `"git push*": "deny"` as two separate, contradictory rules for
+ * overlapping commands in the rendered permission map.
+ */
 function mergePermission(
   specPermission: Record<string, PermissionValue> | undefined,
   denyFloor: string[]
 ): Record<string, PermissionValue> {
-  const merged: Record<string, PermissionValue> = { ...specPermission };
+  const merged: Record<string, PermissionValue> = {};
+  for (const [key, value] of Object.entries(specPermission ?? {})) {
+    if (denyFloor.some((pattern) => isCoveredByFloor(key, pattern))) continue;
+    merged[key] = value;
+  }
   for (const cmd of denyFloor) {
     merged[cmd] = "deny";
   }
@@ -126,7 +167,8 @@ export function renderAgentFile(spec: SpecialistSpec, denyFloor: string[]): stri
   const frontmatter: Record<string, unknown> = {
     description: spec.description,
     role: spec.role,
-    mode: spec.mode ?? "subagent"
+    mode: spec.mode ?? "subagent",
+    generatedBy: GENERATED_BY
   };
   if (spec.model !== undefined) frontmatter.model = spec.model;
   if (spec.temperature !== undefined) frontmatter.temperature = spec.temperature;
@@ -182,7 +224,14 @@ export async function generateSpecialist(
   return { agentId: spec.agentId, path: filePath };
 }
 
-/** Deletes the specialist's agent file. Idempotent: `removed: false` if it was already absent. */
+/**
+ * Deletes the specialist's agent file -- but only if it carries this
+ * module's `generatedBy` marker (see `GENERATED_BY`), so a hand-authored
+ * OpenCode agent file that happens to share an agentId is never deleted.
+ * Idempotent: `removed: false` if the file was already absent. If the file
+ * exists but wasn't generated by this module, returns `removed: false` with
+ * a `reason` and leaves it untouched.
+ */
 export async function retireSpecialist(
   opts: RetireSpecialistOptions
 ): Promise<RetireSpecialistResult> {
@@ -190,6 +239,18 @@ export async function retireSpecialist(
   assertValidAgentId(agentId);
   const filePath = agentPath(projectDir, agentId);
   assertContained(projectDir, filePath);
+
+  let raw: string;
+  try {
+    raw = await readFile(filePath, "utf8");
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return { removed: false };
+    throw err;
+  }
+
+  if (!isGeneratedByUs(raw)) {
+    return { removed: false, reason: "not generated by agentic-os" };
+  }
 
   try {
     await rm(filePath);
@@ -200,15 +261,14 @@ export async function retireSpecialist(
   }
 }
 
-/** Extracts `{role}` from a `---`-fenced YAML frontmatter block, best-effort (undefined on any parse failure). */
-function parseRole(raw: string): string | undefined {
+/** Parses a `---`-fenced YAML frontmatter block into an object, best-effort (undefined on any parse failure). */
+function parseFrontmatter(raw: string): Record<string, unknown> | undefined {
   const match = /^---\r?\n([\s\S]*?)\r?\n---/.exec(raw);
   if (!match) return undefined;
   try {
     const parsed: unknown = parseYaml(match[1]);
-    if (parsed !== null && typeof parsed === "object" && "role" in parsed) {
-      const role = (parsed as Record<string, unknown>).role;
-      return typeof role === "string" ? role : undefined;
+    if (parsed !== null && typeof parsed === "object") {
+      return parsed as Record<string, unknown>;
     }
   } catch {
     // Not valid YAML frontmatter -- fall through to undefined, per
@@ -217,12 +277,25 @@ function parseRole(raw: string): string | undefined {
   return undefined;
 }
 
+/** Extracts `{role}` from frontmatter, best-effort. */
+function parseRole(raw: string): string | undefined {
+  const role = parseFrontmatter(raw)?.role;
+  return typeof role === "string" ? role : undefined;
+}
+
+/** True if `raw`'s frontmatter carries this module's `generatedBy` marker (see `GENERATED_BY`). */
+function isGeneratedByUs(raw: string): boolean {
+  return parseFrontmatter(raw)?.generatedBy === GENERATED_BY;
+}
+
 /**
  * Scans `<projectDir>/.opencode/agent/*.md` and reports each file's id
- * (filename stem) and best-effort `role` (from frontmatter, if present and
- * parseable). Files that aren't generated by this module -- or that fail to
- * parse -- are still listed, just with `role` left undefined. Returns `[]`
- * if the directory doesn't exist yet.
+ * (filename stem), best-effort `role` (from frontmatter, if present and
+ * parseable), and whether it carries this module's `generatedBy` marker
+ * (`generatedByUs` -- see `GENERATED_BY`, checked by `retireSpecialist`
+ * before deleting). Files that aren't generated by this module -- or that
+ * fail to parse -- are still listed, just with `role` left undefined and
+ * `generatedByUs: false`. Returns `[]` if the directory doesn't exist yet.
  */
 export async function listSpecialists(projectDir: string): Promise<ListedSpecialist[]> {
   const dir = agentDir(projectDir);
@@ -241,15 +314,17 @@ export async function listSpecialists(projectDir: string): Promise<ListedSpecial
     const agentId = entry.name.slice(0, -3);
 
     let role: string | undefined;
+    let generatedByUs = false;
     try {
       const raw = await readFile(filePath, "utf8");
       role = parseRole(raw);
+      generatedByUs = isGeneratedByUs(raw);
     } catch {
       // Unreadable file (e.g. removed between readdir and readFile) --
       // still report it, just without a role.
     }
 
-    results.push({ agentId, role, path: filePath });
+    results.push({ agentId, role, path: filePath, generatedByUs });
   }
 
   return results.sort((a, b) => a.agentId.localeCompare(b.agentId));

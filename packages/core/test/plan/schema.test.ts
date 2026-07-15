@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   DomainSchema,
+  MAX_ORG_DEPTH,
   OrgChartSchema,
   OrgNodeSchema,
   PlanSchema,
@@ -10,6 +11,15 @@ import {
   type OrgNode,
   type Plan
 } from "../../src/plan/schema.js";
+
+/** Builds an OrgNode chain `depth` levels deep (iteratively, not recursively). */
+function buildDeepOrgNode(depth: number): OrgNode {
+  let node: OrgNode = { role: "Leaf Specialist", kind: "specialist" };
+  for (let i = 0; i < depth; i++) {
+    node = { role: `Level ${i}`, kind: "manager", children: [node] };
+  }
+  return node;
+}
 
 function planTask(overrides: Record<string, unknown> = {}) {
   return {
@@ -148,6 +158,31 @@ describe("OrgNodeSchema / OrgChartSchema", () => {
     }
   });
 
+  it("rejects orgChart nesting deeper than MAX_ORG_DEPTH with a clean issue, not a thrown error", () => {
+    const deepNode = buildDeepOrgNode(MAX_ORG_DEPTH + 5);
+    let result: ReturnType<typeof OrgNodeSchema.safeParse> | undefined;
+    expect(() => {
+      result = OrgNodeSchema.safeParse(deepNode);
+    }).not.toThrow();
+    expect(result?.success).toBe(false);
+    if (result && !result.success) {
+      expect(result.error.issues.some((i) => i.message.includes("exceeds max depth"))).toBe(true);
+    }
+  });
+
+  it("does not throw a RangeError even for pathologically deep nesting", () => {
+    const veryDeepNode = buildDeepOrgNode(5000);
+    expect(() => OrgNodeSchema.safeParse(veryDeepNode)).not.toThrow();
+    const result = OrgNodeSchema.safeParse(veryDeepNode);
+    expect(result.success).toBe(false);
+  });
+
+  it("accepts nesting right at MAX_ORG_DEPTH", () => {
+    const node = buildDeepOrgNode(MAX_ORG_DEPTH - 1);
+    const result = OrgNodeSchema.safeParse(node);
+    expect(result.success).toBe(true);
+  });
+
   it("rejects a node with an invalid kind", () => {
     const result = OrgNodeSchema.safeParse({ role: "Mystery", kind: "wizard" });
     expect(result.success).toBe(false);
@@ -246,5 +281,30 @@ describe("validateOrgReferences", () => {
     const result = validateOrgReferences(plan);
     expect(result.valid).toBe(false);
     expect(result.issues.length).toBeGreaterThan(0);
+  });
+
+  it("rejects an orgChart nested deeper than MAX_ORG_DEPTH without throwing", () => {
+    const plan: Plan = {
+      objective: "ship the widget",
+      tasks: [],
+      domains: [],
+      orgChart: { generatedFor: "x", root: buildDeepOrgNode(MAX_ORG_DEPTH + 50) }
+    };
+    let result: ReturnType<typeof validateOrgReferences> | undefined;
+    expect(() => {
+      result = validateOrgReferences(plan);
+    }).not.toThrow();
+    expect(result?.valid).toBe(false);
+    expect(result?.issues.some((i) => i.includes("exceeds max depth"))).toBe(true);
+  });
+
+  it("still validates a normal-depth org chart as valid", () => {
+    const plan: Plan = {
+      objective: "ship the widget",
+      tasks: [planTask({ domain: "auth" })],
+      domains: [{ id: "auth", name: "Auth" }],
+      orgChart: buildOrgChart()
+    };
+    expect(validateOrgReferences(plan)).toEqual({ valid: true, issues: [] });
   });
 });

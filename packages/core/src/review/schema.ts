@@ -40,7 +40,12 @@ export const ReviewFindingSchema = z.object({
   severity: ReviewSeveritySchema,
   file: z.string().optional(),
   line: z.number().int().positive().optional(),
-  note: z.string().min(1)
+  // `.trim()` before `.min(8)` so whitespace-only notes (" ") and
+  // single-char throwaways ("x", ".") can't satisfy the anti-rubber-stamp
+  // rule below just by being non-empty. 8 trimmed characters rejects those
+  // while still admitting a legitimately terse real note (e.g. "SQL
+  // injection", 13 chars).
+  note: z.string().trim().min(8, "note must contain at least 8 characters of real content")
 });
 export type ReviewFinding = z.infer<typeof ReviewFindingSchema>;
 

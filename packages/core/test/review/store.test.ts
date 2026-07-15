@@ -167,7 +167,7 @@ describe("summarizeTask", () => {
       verdict({
         reviewerId: "architecture",
         verdict: "revise",
-        findings: [{ severity: "minor", note: "naming" }],
+        findings: [{ severity: "minor", note: "inconsistent naming" }],
         at: 1000
       })
     );
