@@ -1,6 +1,7 @@
 export * from "./lib/fs.js";
 export * from "./config/index.js";
 export * from "./worktree/index.js";
+export * from "./model-catalog/index.js";
 export * from "./events/index.js";
 export * from "./tasks/index.js";
 export * from "./budget/index.js";

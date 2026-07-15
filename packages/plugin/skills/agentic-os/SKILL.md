@@ -25,6 +25,14 @@ budget downgrade). One worker per task card. Never give two concurrently
 running workers overlapping file ownership — that's a structural conflict,
 not something to catch after the fact.
 
+Models default to the best available free-tier option automatically:
+`models.yaml`'s shipped routing resolves to `auto:free`, which picks the
+newest zero-cost, tool-call-capable model from a provider actually usable on
+this machine, re-checked against the live catalog on every MCP server
+start — so it's never a stale hardcoded name. Only pass `model` or a
+`taskType` pointing at a pinned route when the human explicitly asks for a
+specific model.
+
 ## 2. Poll — never let 30 minutes pass silently
 
 Poll `worker_status(workerId)` roughly every 1–5 minutes while a worker

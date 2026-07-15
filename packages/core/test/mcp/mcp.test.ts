@@ -11,6 +11,7 @@ import { runGit } from "../../src/worktree/index.js";
 import { openEventLog } from "../../src/events/index.js";
 import type { WorkerMeta } from "../../src/worker/index.js";
 import type { OpencodeClient, PromptResult } from "../../src/opencode-client/types.js";
+import type { FetchFn } from "../../src/opencode-client/http.js";
 
 /** Path to the real shipped `config/` directory at the repo root (M1 test fixture per the task brief). */
 const PLATFORM_CONFIG_DIR = join(dirname(fileURLToPath(import.meta.url)), "../../../../config");
@@ -75,15 +76,59 @@ interface Harness {
   close(): Promise<void>;
 }
 
+/**
+ * Config's shipped `routing.default` is the `auto:free` sentinel (see
+ * `config/models.yaml`), so every `spawn_worker` call in this suite resolves
+ * it via `model-catalog/`'s live-catalog fetch unless a test passes an
+ * explicit `model`. Rather than make every unrelated test (budget, abort,
+ * verify, ...) know about that, `setupServer` wires a fake `fetchFn`
+ * returning a minimal one-provider/one-model free catalog by default, so
+ * resolution always succeeds trivially; tests that care about *which*
+ * model was resolved pass their own `fetchFn`/catalog explicitly (see
+ * "auto:free model resolution" below).
+ */
+const DEFAULT_FREE_CATALOG = {
+  all: [
+    {
+      id: "opencode",
+      models: {
+        "stub-free-model": {
+          id: "stub-free-model",
+          providerID: "opencode",
+          capabilities: { toolcall: true },
+          cost: { input: 0, output: 0 },
+          limit: { context: 100000 },
+          release_date: "2026-01-01"
+        }
+      }
+    }
+  ],
+  default: {},
+  connected: ["opencode"]
+};
+
+/** A `vi.fn`-wrapped fake fetch so call counts can be asserted (e.g. the caching test below). */
+function fakeCatalogFetch(payload: unknown = DEFAULT_FREE_CATALOG) {
+  return vi.fn(async (): Promise<Response> => {
+    return {
+      ok: true,
+      status: 200,
+      json: async () => payload,
+      text: async () => JSON.stringify(payload)
+    } as Response;
+  });
+}
+
 async function setupServer(
   opencodeClient: OpencodeClient,
   forProjectDir = projectDir,
-  now?: () => number
+  now?: () => number,
+  fetchFn: FetchFn = fakeCatalogFetch()
 ): Promise<Harness> {
   const agentic = await createAgenticMcpServer({
     projectDir: forProjectDir,
     platformConfigDir: PLATFORM_CONFIG_DIR,
-    deps: now ? { client: opencodeClient, now } : { client: opencodeClient }
+    deps: { client: opencodeClient, fetchFn, ...(now ? { now } : {}) }
   });
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   await agentic.server.connect(serverTransport);
@@ -160,7 +205,9 @@ async function readRunId(forProjectDir: string): Promise<string> {
   return (JSON.parse(raw) as { runId: string }).runId;
 }
 
-async function readRunEvents(forProjectDir: string): Promise<Array<{ type: string; tool?: string; ok?: boolean; workerId?: string }>> {
+async function readRunEvents(
+  forProjectDir: string
+): Promise<Array<{ type: string; tool?: string; ok?: boolean; workerId?: string; model?: string; reason?: string }>> {
   const runId = await readRunId(forProjectDir);
   const raw = await readFile(join(forProjectDir, ".agentic-os", "runs", runId, "events.jsonl"), "utf8");
   return raw
@@ -542,7 +589,15 @@ describe("spawn_worker infra failure", () => {
     });
     const { client: mcp, close } = await setupServer(client);
     try {
-      const spawned = await callTool(mcp, "spawn_worker", { taskId: "task-infra-fail", prompt: "do the thing" });
+      // Explicit `model` bypasses auto:free resolution (which would also call
+      // ensureServer, and would itself surface this same failure one step
+      // earlier without ever reaching supervisor.spawn) -- this test targets
+      // supervisor.spawn's OWN ensureServer-failure handling specifically.
+      const spawned = await callTool(mcp, "spawn_worker", {
+        taskId: "task-infra-fail",
+        prompt: "do the thing",
+        model: "github-copilot/gpt-4.1"
+      });
       expect(spawned.isError).toBe(true);
       expect(spawned.data.state).toBe("failed");
       expect(typeof spawned.data.error).toBe("string");
@@ -601,6 +656,114 @@ describe("resolveRunId TOCTOU", () => {
     } finally {
       await a.close();
       await b.close();
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// auto:free model resolution
+// ---------------------------------------------------------------------------
+
+describe("auto:free model resolution", () => {
+  it("resolves the shipped routing.default ('auto:free') via the live catalog, passes the concrete model to the supervisor, and logs a model_resolved event", async () => {
+    const catalog = {
+      all: [
+        {
+          id: "opencode",
+          models: {
+            "newest-free": {
+              id: "newest-free",
+              providerID: "opencode",
+              capabilities: { toolcall: true },
+              cost: { input: 0, output: 0 },
+              limit: { context: 190000 },
+              release_date: "2026-06-26"
+            },
+            "older-free": {
+              id: "older-free",
+              providerID: "opencode",
+              capabilities: { toolcall: true },
+              cost: { input: 0, output: 0 },
+              limit: { context: 200000 },
+              release_date: "2025-10-17"
+            }
+          }
+        },
+        {
+          id: "github-copilot",
+          models: {
+            "paid-model": {
+              id: "paid-model",
+              providerID: "github-copilot",
+              capabilities: { toolcall: true },
+              cost: { input: 2, output: 10 },
+              limit: { context: 200000 },
+              release_date: "2026-06-30"
+            }
+          }
+        }
+      ],
+      default: {},
+      connected: ["github-copilot", "opencode"]
+    };
+
+    const createSessionSpy = vi.fn(async (_baseUrl: string, opts: { directory: string; model?: string }) => ({
+      id: `session-${randomBytes(4).toString("hex")}`,
+      directory: opts.directory
+    }));
+    const client = createMockClient({ createSession: createSessionSpy });
+
+    const { client: mcp, close } = await setupServer(client, projectDir, undefined, fakeCatalogFetch(catalog));
+    try {
+      // No `model`/`taskType` -- falls through to the real shipped
+      // config/models.yaml's routing.default, which is the auto:free sentinel.
+      const spawned = await callTool(mcp, "spawn_worker", { taskId: "auto-free-1", prompt: "do the thing" });
+      expect(spawned.isError).toBeFalsy();
+
+      expect(createSessionSpy).toHaveBeenCalledTimes(1);
+      const sessionOpts = createSessionSpy.mock.calls[0]![1];
+      expect(sessionOpts.model).toBe("opencode/newest-free");
+
+      const events = await readRunEvents(projectDir);
+      const resolvedEvent = events.find((e) => e.type === "model_resolved");
+      expect(resolvedEvent).toBeDefined();
+      expect(resolvedEvent?.model).toBe("opencode/newest-free");
+      expect(resolvedEvent?.reason).toBe("auto:free");
+    } finally {
+      await close();
+    }
+  });
+
+  it("caches the catalog fetch across multiple spawn_worker calls on one server instance", async () => {
+    const fetchSpy = fakeCatalogFetch();
+    const client = createMockClient();
+    const { client: mcp, close } = await setupServer(client, projectDir, undefined, fetchSpy);
+    try {
+      const first = await callTool(mcp, "spawn_worker", { taskId: "auto-free-a", prompt: "a" });
+      const second = await callTool(mcp, "spawn_worker", { taskId: "auto-free-b", prompt: "b" });
+      expect(first.isError).toBeFalsy();
+      expect(second.isError).toBeFalsy();
+      expect(fetchSpy).toHaveBeenCalledTimes(1);
+    } finally {
+      await close();
+    }
+  });
+
+  it("returns a clean isError, with no worker created, when no free model qualifies", async () => {
+    const catalog = { all: [], default: {}, connected: [] };
+    const client = createMockClient();
+    const { client: mcp, close } = await setupServer(client, projectDir, undefined, fakeCatalogFetch(catalog));
+    try {
+      const spawned = await callTool(mcp, "spawn_worker", { taskId: "none-free", prompt: "do the thing" });
+      expect(spawned.isError).toBe(true);
+      expect(String(spawned.data.error)).toMatch(/auto:free/);
+
+      const runId = await readRunId(projectDir);
+      const workersDir = join(projectDir, ".agentic-os", "runs", runId, "workers");
+      const entries = await readdir(workersDir).catch(() => []);
+      expect(entries).toEqual([]);
+    } finally {
+      await close();
     }
   });
 });

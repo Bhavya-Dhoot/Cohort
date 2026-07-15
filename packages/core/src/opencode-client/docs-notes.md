@@ -126,3 +126,58 @@ followed by immediate parent `process.exit()` leaves the child running and
 reachable over HTTP — confirmed via `tasklist` + `curl` against
 `/global/health` in a fresh shell after the spawning process had already
 exited. `taskkill /PID <pid> /T /F` cleanly terminates it.
+
+## Model catalog / free-model discovery (opencode 1.15.13, live)
+
+Discovered by starting a throwaway `opencode serve` and reading its live
+`GET /doc` (283KB OpenAPI 3.1). Candidate model/provider endpoints found in
+`doc.paths`: `/config/providers`, `/provider`, `/api/model`, `/api/provider`,
+plus `/auth/{providerID}` and `/tui/open-models`. **`GET {baseUrl}/provider`
+is the one used** (not `/config/providers`, `/api/provider`, or the v2
+`/api/model`/`/api/provider` pair) — it is the only one of these whose
+response says which providers are actually *usable right now*, not just
+which exist in the models.dev catalog.
+
+Response shape (verified live, `content-type: application/json`):
+```
+{ all: Provider[], default: Record<providerId, modelId>, connected: string[] }
+```
+- `connected` — provider ids OpenCode can reach on this machine right now:
+  authenticated (checked against `~/.local/share/opencode/auth.json`, same
+  data `opencode auth list` reads) or keyless (e.g. the built-in `opencode`
+  Zen gateway needs no auth at all). Live on this machine:
+  `["github-copilot", "opencode"]` — matches `opencode auth list`'s single
+  `GitHub Copilot` entry, plus `opencode` which needs no entry there at all.
+- `all` — every provider models.dev knows about (100+), most **not**
+  connected here; each carries `models: Record<modelId, Model>`.
+- `Model` (full zod-derived shape in `doc.components.schemas.Model`) carries
+  `cost: {input, output, cache:{read,write}, tiers?, experimentalOver200K?}`
+  (USD per million tokens; `input`/`output`/`cache` always present — never
+  actually absent on this catalog, despite `cost` being schema-optional),
+  `capabilities.toolcall: boolean`, `limit: {context, input?, output}`,
+  `release_date: string` (`YYYY-MM-DD`), `status: 'alpha'|'beta'|
+  'deprecated'|'active'`.
+- Confirms the task brief's prediction: `github-copilot`'s models (e.g.
+  `claude-sonnet-5`: `cost.input=2, cost.output=10`) report **nonzero**
+  nominal catalog cost even though Copilot bills nothing extra per-token
+  within the subscription — "free" for `model-catalog/` purposes means
+  catalog-cost-zero, not "doesn't show up on a bill", so Copilot models are
+  correctly excluded by a `cost.input===0 && cost.output===0` filter.
+  `opencode` (Zen)'s six models — `mimo-v2.5-free`, `nemotron-3-ultra-free`,
+  `deepseek-v4-flash-free`, `north-mini-code-free`, `hy3-free`, `big-pickle`
+  — all report `cost.input===0 && cost.output===0` and
+  `capabilities.toolcall===true` live.
+- `/provider` works with no query params (`directory`/`workspace` are both
+  optional and irrelevant to provider connectivity, which is a
+  machine-level fact, not a per-project one) — verified by comparing a call
+  with `?directory=F:/Agentic_os` against one with no query string at all:
+  identical `connected` list and identical opencode-provider free-model
+  count both times.
+
+**Winning model on this machine (2026-07-15, verified live):**
+`opencode/hy3-free` — newest `release_date` (`2026-06-26`) among the free +
+tool-call + connected set. Probed with `opencode run -m opencode/hy3-free
+"reply with OK"`, then `opencode export <sessionID>` on the resulting
+session: `info.cost === 0`. This is the model `model-catalog/`'s
+`resolveFreeModel` is expected to pick given today's catalog — not
+hardcoded anywhere, since the whole point is that this list moves.

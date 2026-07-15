@@ -91,7 +91,7 @@ describe("loadConfig", () => {
       infraRetryMax: 3
     });
     expect(config.orchestrator.worktree.baseDir).toBeNull();
-    expect(config.models.routing.default).toBe("github-copilot/gpt-4.1");
+    expect(config.models.routing.default).toBe("auto:free");
     expect(config.agents.default_permission.deny).toContain("git push*");
     expect(config.agents.max_concurrent_specialists).toBe(5);
     expect(config.memory.store).toBe("jsonl");

@@ -59,7 +59,18 @@ import { createBudgetTracker, type BudgetTracker } from "../budget/index.js";
 import { createWorkerSupervisor, type WorkerMeta, type WorkerState, type WorkerSupervisor } from "../worker/index.js";
 import { createOpencodeClient } from "../opencode-client/client.js";
 import type { OpencodeClient, SessionUsage } from "../opencode-client/types.js";
+import type { FetchFn } from "../opencode-client/http.js";
 import { runGit } from "../worktree/index.js";
+import { resolveFreeModel, type ResolveFreeModelResult } from "../model-catalog/index.js";
+
+/**
+ * Sentinel routing value (see `config/models.yaml`'s `routing.default`):
+ * resolved lazily, once per MCP server instance, via `model-catalog/`
+ * against the run's live `opencode serve` catalog rather than a hardcoded
+ * model string. An explicit `spawn_worker` `model` param, or a `taskType`
+ * route pointing at a real `provider/model` string, bypasses this entirely.
+ */
+const AUTO_FREE_MODEL = "auto:free";
 
 // ---------------------------------------------------------------------------
 // Public API
@@ -68,6 +79,8 @@ import { runGit } from "../worktree/index.js";
 export interface CreateAgenticMcpServerDeps {
   client?: OpencodeClient;
   now?: () => number;
+  /** Used only to resolve `auto:free` against the catalog; defaults to the global `fetch`. */
+  fetchFn?: FetchFn;
 }
 
 export interface CreateAgenticMcpServerOptions {
@@ -110,6 +123,7 @@ export async function createAgenticMcpServer(opts: CreateAgenticMcpServerOptions
   const projectDir = resolve(opts.projectDir);
   const now = opts.deps?.now ?? Date.now;
   const client = opts.deps?.client ?? createOpencodeClient();
+  const fetchFn = opts.deps?.fetchFn ?? fetch;
 
   const stateRoot = join(projectDir, ".agentic-os");
   const overridesDir = join(stateRoot, "config");
@@ -142,7 +156,18 @@ export async function createAgenticMcpServer(opts: CreateAgenticMcpServerOptions
 
   const runEventLog = openEventLog(join(runDir, "events.jsonl"));
 
-  const ctx: ServerCtx = { projectDir, runDir, config, supervisor, budget, runEventLog, cachedBaseRef: undefined };
+  const ctx: ServerCtx = {
+    projectDir,
+    runDir,
+    config,
+    supervisor,
+    budget,
+    runEventLog,
+    cachedBaseRef: undefined,
+    client,
+    fetchFn,
+    cachedFreeModel: undefined
+  };
 
   const server = new McpServer({ name: "agentic-os", version: "0.1.0" });
   registerTools(server, ctx);
@@ -222,6 +247,16 @@ interface ServerCtx {
   runEventLog: EventLog;
   /** Lazily resolved, memoized `git rev-parse --abbrev-ref HEAD` for `spawn_worker`'s `baseBranch` check. */
   cachedBaseRef: string | undefined;
+  client: OpencodeClient;
+  fetchFn: FetchFn;
+  /**
+   * Memoized `resolveFreeModel` result for `AUTO_FREE_MODEL`, scoped to this
+   * server instance's lifetime — resolved at most once per MCP server start
+   * (including a resolution failure, which stays cached too) so restarting
+   * the MCP server is the way to pick up a changed catalog, per the calling
+   * contract ("re-resolve per MCP server start").
+   */
+  cachedFreeModel: Promise<ResolveFreeModelResult> | undefined;
 }
 
 /** A tool handler's outcome before it's wrapped into an MCP `CallToolResult`. */
@@ -300,6 +335,24 @@ async function resolveDefaultBaseRef(ctx: ServerCtx): Promise<string> {
     ctx.cachedBaseRef = stdout.trim();
   }
   return ctx.cachedBaseRef;
+}
+
+/**
+ * Resolves the `AUTO_FREE_MODEL` sentinel to a concrete `"provider/model"`
+ * string, memoized on `ctx.cachedFreeModel` for this server instance's
+ * lifetime (see that field's docstring). `ensureServer` is called with the
+ * same `stateDir` (`ctx.runDir`) the `WorkerSupervisor` itself uses, so this
+ * attaches to the same `opencode serve` a spawn would use rather than
+ * starting a second one — `ensureServer` is idempotent by design (it reuses
+ * a live server recorded in `server.json`), so calling it here and again
+ * inside `supervisor.spawn` is safe.
+ */
+async function resolveAutoFreeModel(ctx: ServerCtx): Promise<ResolveFreeModelResult> {
+  ctx.cachedFreeModel ??= (async () => {
+    const handle = await ctx.client.ensureServer({ stateDir: ctx.runDir });
+    return resolveFreeModel(handle.baseUrl, ctx.fetchFn);
+  })();
+  return ctx.cachedFreeModel;
 }
 
 function textResult(payload: unknown, isError?: boolean): CallToolResult {
@@ -535,7 +588,23 @@ async function spawnWorkerHandler(ctx: ServerCtx, input: SpawnWorkerInput): Prom
     }
   }
 
-  const model = input.model ?? resolveModelRoute(ctx.config, input.taskType);
+  let model = input.model ?? resolveModelRoute(ctx.config, input.taskType);
+  if (model === AUTO_FREE_MODEL) {
+    let resolved: ResolveFreeModelResult;
+    try {
+      resolved = await resolveAutoFreeModel(ctx);
+    } catch (err) {
+      return {
+        isError: true,
+        payload: {
+          error: `Resolving '${AUTO_FREE_MODEL}' failed: ${err instanceof Error ? err.message : String(err)}`
+        }
+      };
+    }
+    model = resolved.model;
+    await ctx.runEventLog.append({ type: "model_resolved", model, reason: AUTO_FREE_MODEL });
+  }
+
   const workerId = randomBytes(4).toString("hex");
 
   const reserved = await ctx.budget.reserve(workerId);
