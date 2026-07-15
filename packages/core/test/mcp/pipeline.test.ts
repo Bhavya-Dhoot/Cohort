@@ -455,6 +455,30 @@ async function spawnCommitVerify(mcp: Client, taskId: string): Promise<void> {
   expect(verified.data.state).toBe("verified");
 }
 
+/**
+ * Spawns a worker for `taskId`, creates a file in its worktree WITHOUT
+ * committing it, and verifies it. Mirrors a worker that created files but
+ * never ran `git commit` itself -- `verify_worker` only runs the given
+ * check command against the worktree's filesystem state, so this still
+ * reaches 'verified' despite the uncommitted change.
+ */
+async function spawnUncommittedVerify(mcp: Client, taskId: string): Promise<void> {
+  const spawned = await callTool(mcp, "spawn_worker", { taskId, prompt: `implement ${taskId}` });
+  expect(spawned.isError).toBeFalsy();
+  const workerId = spawned.data.workerId as string;
+  const worktreePath = spawned.data.worktreePath as string;
+  await waitForWorkerState(mcp, workerId, ["completed"]);
+
+  const owned = taskId.split("-")[1] ?? taskId;
+  const dir = join(worktreePath, owned);
+  await mkdir(dir, { recursive: true });
+  await writeFile(join(dir, "file.txt"), `output from ${taskId}\n`, "utf8");
+  // Deliberately no `git add`/`git commit` here.
+
+  const verified = await callTool(mcp, "verify_worker", { workerId, command: `node -e "process.exit(0)"` });
+  expect(verified.data.state).toBe("verified");
+}
+
 describe("integrate_batch edge cases", () => {
   it("refuses with isError on a detached-HEAD projectDir, without ever writing batch status 'integrating'", async () => {
     const { client: mcp, close } = await setupServer(createMockClient());
@@ -602,6 +626,50 @@ describe("integrate_batch edge cases", () => {
       const status = await callTool(mcp, "batch_status", { batchId });
       expect(status.data.status).toBe("integrated");
       expect(status.data.tasks[0].taskState).toBe("done");
+    } finally {
+      await close();
+    }
+  }, 15000);
+
+  it("auto-commits a verified worker's uncommitted worktree changes before merging, instead of silently integrating an empty diff", async () => {
+    await writeTrivialSuiteOverride(projectDir);
+    const { client: mcp, close } = await setupServer(createMockClient());
+    try {
+      await callTool(mcp, "plan_submit", {
+        objective: "build",
+        tasks: [{ id: "task-a", title: "A", prompt: "a", dependsOn: [], fileOwnership: ["a/**"] }]
+      });
+      const batchRes = await callTool(mcp, "next_batch", {});
+      const batchId = batchRes.data.batchId as string;
+      // Worker creates a file but never commits it -- this is the exact gap:
+      // verify_worker's filesystem check still passes.
+      await spawnUncommittedVerify(mcp, "task-a");
+
+      const { stdout: baseSha } = await runGit(["rev-parse", "main"], projectDir);
+
+      const integrated = await callTool(mcp, "integrate_batch", { batchId, regressionSuite: "trivial" });
+      expect(integrated.isError).toBeFalsy();
+      expect(integrated.data.merges).toHaveLength(1);
+      expect(integrated.data.merges[0]).toMatchObject({ taskId: "task-a", outcome: "merged" });
+      expect(integrated.data.allMerged).toBe(true);
+      expect(integrated.data.allPassed).toBe(true);
+
+      // A real, non-empty merge: the integration branch's tip is a
+      // different commit than base, not a no-op merge over nothing.
+      const { stdout: integrationSha } = await runGit(
+        ["rev-parse", integrated.data.integrationBranch],
+        projectDir
+      );
+      expect(integrationSha.trim()).not.toBe(baseSha.trim());
+
+      // The uncommitted file the worker created IS present on the
+      // integration branch -- proves integrate_batch auto-committed it
+      // (mirroring finalize_worker's merge-path auto-commit) before merging,
+      // rather than merging the worker's branch as-is with nothing on it.
+      const blobRef = `${integrated.data.integrationBranch}:a/file.txt`;
+      await expect(runGit(["cat-file", "-e", blobRef], projectDir)).resolves.toBeDefined();
+      const { stdout: content } = await runGit(["show", blobRef], projectDir);
+      expect(content).toBe("output from task-a\n");
     } finally {
       await close();
     }

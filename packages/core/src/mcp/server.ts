@@ -79,7 +79,7 @@ import {
 } from "../tasks/index.js";
 import { openMemoryStore, type MemoryStore } from "../memory/index.js";
 import { resolveSuiteName, runCheckSuite, type CheckSuiteResult } from "../checks/index.js";
-import { PlanSchema, type Batch, type ReplanRecord } from "../plan/index.js";
+import { PlanSchema, type Batch, type ReplanRecord, type Domain, type OrgChart } from "../plan/index.js";
 
 /**
  * Sentinel routing value (see `config/models.yaml`'s `routing.default`):
@@ -1282,8 +1282,8 @@ interface PlanSubmitInput {
   objective: string;
   tasks: PlanTaskInput[];
   contracts?: { id: string; name: string; description: string; interface?: string; producerTaskId?: string; consumerTaskIds?: string[] }[] | undefined;
-  domains?: string[] | undefined;
-  orgChart?: unknown;
+  domains?: Domain[] | undefined;
+  orgChart?: OrgChart | undefined;
 }
 
 async function planSubmitHandler(ctx: ServerCtx, input: PlanSubmitInput): Promise<ToolOutcome> {
@@ -1405,6 +1405,40 @@ async function batchStatusHandler(ctx: ServerCtx, input: BatchStatusInput): Prom
   };
 }
 
+/**
+ * Commits whatever a verified worker's worktree left uncommitted, so
+ * integrate_batch merges the worker's actual file changes instead of an
+ * empty diff. `verify_worker` only checks that the worker's filesystem
+ * state satisfies the verification command — it says nothing about whether
+ * the worker ever ran `git commit` — so without this a worker that created
+ * files but never committed passes verification yet merges nothing, and
+ * integrate_batch reports success over an empty diff.
+ *
+ * This is a deliberate small duplicate of finalize_worker's merge-path
+ * auto-commit (see `worker/index.ts`'s `finalizeWorker`, action "merge",
+ * around its `assertIsWorktreeRoot` + `git status --porcelain` + `git add
+ * -A`/`git commit` sequence) so both paths that merge a verified worker's
+ * branch behave identically. worker/index.ts is out of this module's
+ * ownership, so the pattern is copied here rather than shared.
+ *
+ * If the worktree no longer exists on disk (e.g. already cleaned up
+ * out-of-band), there is nothing to commit — the worker's branch already
+ * holds whatever was committed before removal — so this is skipped rather
+ * than treated as an error.
+ */
+async function commitDirtyWorktreeForMerge(worktreePath: string, workerId: string): Promise<void> {
+  try {
+    await assertIsWorktreeRoot(worktreePath);
+  } catch {
+    return;
+  }
+  const dirty = await runGit(["status", "--porcelain"], worktreePath);
+  if (dirty.stdout.trim().length > 0) {
+    await runGit(["add", "-A"], worktreePath);
+    await runGit(["commit", "-m", `agentic worker ${workerId}`], worktreePath);
+  }
+}
+
 interface IntegrateBatchInput {
   batchId: string;
   regressionSuite?: string | undefined;
@@ -1518,6 +1552,20 @@ async function doIntegrateBatch(ctx: ServerCtx, input: IntegrateBatchInput): Pro
   // Also fail fast (before 'integrating'/any merge) on a detached-HEAD
   // projectDir — see resolveDefaultBaseRef's guard.
   const baseRef = await resolveDefaultBaseRef(ctx);
+
+  // A worker reaching 'verified' only proves its worktree passed
+  // verify_worker's check command — not that it ever committed. Commit each
+  // merging worker's outstanding changes now (mirroring finalize_worker's
+  // merge-path auto-commit — see commitDirtyWorktreeForMerge above) so the
+  // merge below captures real work instead of silently integrating an empty
+  // diff. Runs before any git/state mutation here, same fail-fast placement
+  // as the suite-validation guard above.
+  for (const { taskId } of merges) {
+    const worker = workersByTask.get(taskId);
+    if (worker?.worktreePath) {
+      await commitDirtyWorktreeForMerge(worker.worktreePath, worker.workerId);
+    }
+  }
 
   await atomicWriteJson(batchPath(ctx, batch.batchId), { ...batch, status: "integrating" });
 
