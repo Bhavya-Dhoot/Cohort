@@ -1,9 +1,10 @@
+import { execFile } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { mkdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { runVerification } from "../../src/verify/index.js";
+import { runVerification, type KillProcessTreeFn } from "../../src/verify/index.js";
 
 let dir: string;
 
@@ -13,7 +14,20 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
-  await rm(dir, { recursive: true, force: true });
+  // Windows can briefly hold a directory handle open for a few dozen ms
+  // after a killed child process disappears from the process table (the
+  // handle-release race `waitUntilDead`'s PID-existence poll can't see) —
+  // retry instead of failing the test on that transient EBUSY.
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      await rm(dir, { recursive: true, force: true });
+      return;
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code !== "EBUSY" || attempt >= 9) throw err;
+      await new Promise((resolve) => setTimeout(resolve, 200));
+    }
+  }
 });
 
 /** Polls until `pid` no longer exists (or `maxWaitMs` elapses) using the
@@ -98,4 +112,39 @@ describe("runVerification", () => {
       runVerification({ cwd: missingDir, command: `node -e "process.exit(0)"` })
     ).rejects.toThrow();
   });
+
+  it("still settles (instead of hanging forever) when the kill mechanism fails to actually kill the process", async () => {
+    // Stubs the kill mechanism as a no-op, simulating a `taskkill`/SIGKILL
+    // that silently fails to terminate the tree — the child is genuinely
+    // still alive when the grace window elapses.
+    const noopKill: KillProcessTreeFn = async () => {};
+
+    const start = Date.now();
+    const result = await runVerification({
+      cwd: dir,
+      command: `node -e "console.log(process.pid); setInterval(()=>{},1000)"`,
+      timeoutMs: 200,
+      killProcessTree: noopKill
+    });
+    const wallClockMs = Date.now() - start;
+
+    expect(result.timedOut).toBe(true);
+    expect(result.passed).toBe(false);
+    expect(result.exitCode).toBe(null);
+    expect(result.stderr).toMatch(
+      /\[verify\] kill may have failed; process may still be running \(pid \d+\)/
+    );
+    // Settled within timeoutMs + the ~5s grace window, not hung forever.
+    expect(wallClockMs).toBeLessThan(10_000);
+
+    // The stub never actually killed the child — it's still alive. Kill it
+    // for real now (same mechanism the source uses) so the test doesn't leak
+    // a process or race the containing directory's removal in afterEach.
+    const childPid = parseInt(result.stdout.trim(), 10);
+    expect(Number.isNaN(childPid)).toBe(false);
+    await new Promise<void>((resolve) => {
+      execFile("taskkill", ["/PID", String(childPid), "/T", "/F"], () => resolve());
+    });
+    await expect(waitUntilDead(childPid)).resolves.toBe(true);
+  }, 15_000);
 });

@@ -134,3 +134,48 @@ describe("rounding", () => {
     expect(budget.snapshot().committedUsd).toBe(0.3);
   });
 });
+
+describe("concurrent persist serialization", () => {
+  it("serializes concurrent reserve/reconcile persists so no on-disk entry is lost", async () => {
+    const budget = await createBudgetTracker({ filePath, softCapUsd: 1000, hardCapUsd: 1000 });
+
+    await Promise.all([
+      budget.reserve("workerA", 1),
+      budget.reserve("workerB", 2),
+      budget.reserve("workerC", 3),
+      budget.reconcile("workerD", 4),
+      budget.reconcile("workerE", 5)
+    ]);
+
+    const onDisk = JSON.parse(await readFile(filePath, "utf8"));
+    expect(Object.keys(onDisk.perWorker).sort()).toEqual([
+      "workerA",
+      "workerB",
+      "workerC",
+      "workerD",
+      "workerE"
+    ]);
+  });
+});
+
+describe("merge-on-write across instances", () => {
+  it("does not clobber a worker entry from another tracker instance it never touched", async () => {
+    const budgetA = await createBudgetTracker({ filePath, softCapUsd: 1000, hardCapUsd: 1000 });
+    await budgetA.reserve("workerA", 1);
+
+    // Simulates a second process/tracker instance pointed at the same
+    // cost.json, loading a snapshot that already contains workerA.
+    const budgetB = await createBudgetTracker({ filePath, softCapUsd: 1000, hardCapUsd: 1000 });
+
+    // budgetA updates workerA again; budgetB's in-memory copy is now stale.
+    await budgetA.reconcile("workerA", 9);
+
+    // budgetB persists a change for a worker it owns; it must not clobber
+    // workerA with its own stale snapshot.
+    await budgetB.reserve("workerB", 2);
+
+    const onDisk = JSON.parse(await readFile(filePath, "utf8"));
+    expect(onDisk.perWorker.workerA).toEqual({ committedUsd: 9 });
+    expect(onDisk.perWorker.workerB).toEqual({ reservedUsd: 2 });
+  });
+});

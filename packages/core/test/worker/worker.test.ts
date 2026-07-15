@@ -283,6 +283,37 @@ describe("reconcile", () => {
     expect(reloaded.state).toBe("orphaned");
   });
 
+  it("marks a worker crashed while still 'created' as orphaned", async () => {
+    const workerId = "crashed-created-1";
+    const crashedMeta: WorkerMeta = {
+      workerId,
+      runId: "run-orphan-created",
+      taskId: "t",
+      state: "created",
+      prompt: "p",
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+      attempts: { infra: 0 }
+    };
+    await mkdir(join(stateDir, "workers", workerId), { recursive: true });
+    await writeFile(join(stateDir, "workers", workerId, "meta.json"), JSON.stringify(crashedMeta), "utf8");
+
+    const supervisor = createWorkerSupervisor({
+      client: createMockClient(),
+      stateDir,
+      repoDir,
+      worktreeBaseDir: worktreesDir,
+      runId: "run-orphan-created"
+    });
+    const changed = await supervisor.reconcile();
+
+    expect(changed).toHaveLength(1);
+    expect(changed[0]?.state).toBe("orphaned");
+
+    const reloaded = await supervisor.status(workerId);
+    expect(reloaded.state).toBe("orphaned");
+  });
+
   it("flips a running worker with an idle session to completed via status()", async () => {
     const workerId = "running-1";
     const runningMeta: WorkerMeta = {
@@ -366,5 +397,144 @@ describe("persistence across restart", () => {
     const reloaded = await supervisorB.status(spawned.workerId);
     expect(reloaded.state).toBe("completed");
     expect(reloaded.workerId).toBe(spawned.workerId);
+  });
+});
+
+describe("verify() rejection recovery", () => {
+  it("reverts to 'completed' with a recorded lastError when runVerification rejects, and allows a re-verify", async () => {
+    const client = createMockClient();
+    const supervisor = createWorkerSupervisor({
+      client,
+      stateDir,
+      repoDir,
+      worktreeBaseDir: worktreesDir,
+      runId: "run-verify-reject",
+      defaults: { baseRef: "main" }
+    });
+
+    const spawned = await supervisor.spawn({ taskId: "task-verify-reject", prompt: "do the thing" });
+    const completed = await waitForState(supervisor, spawned.workerId, ["completed"]);
+
+    // Simulate the worktree disappearing out-of-band before verify runs
+    // (e.g. a concurrent cleanup): the verify command's `cwd` no longer
+    // exists, so the spawned process fires an 'error' event and
+    // runVerification()'s promise rejects instead of resolving.
+    await rm(completed.worktreePath!, { recursive: true, force: true });
+
+    await expect(supervisor.verify(spawned.workerId, `node -e "process.exit(0)"`)).rejects.toThrow();
+
+    const status = await supervisor.status(spawned.workerId);
+    expect(status.state).toBe("completed");
+    expect(status.lastError?.classification).toBe("infra");
+
+    // Worker must not be wedged in 'verifying': a re-verify is legal again
+    // (it will fail the same way since the worktree is still gone, but the
+    // point is the state machine accepts the call rather than throwing
+    // "illegal from state 'verifying'").
+    await expect(supervisor.verify(spawned.workerId, `node -e "process.exit(0)"`)).rejects.toThrow();
+  });
+});
+
+describe("abort vs status() reconciliation race", () => {
+  it("keeps the aborted state when abort() interleaves with a status()-triggered reconciliation", async () => {
+    const workerId = "running-race-1";
+    const runningMeta: WorkerMeta = {
+      workerId,
+      runId: "run-race",
+      taskId: "t",
+      state: "running",
+      prompt: "p",
+      baseUrl: "http://127.0.0.1:4096",
+      sessionId: "s1",
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+      attempts: { infra: 0 }
+    };
+    await mkdir(join(stateDir, "workers", workerId), { recursive: true });
+    await writeFile(join(stateDir, "workers", workerId, "meta.json"), JSON.stringify(runningMeta), "utf8");
+
+    const client = createMockClient({
+      // Slow enough that abort()'s persist() reliably lands on disk first.
+      getSessionStatus: vi.fn(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 150));
+        return { id: "s1", state: "idle" as const };
+      }),
+      abort: vi.fn(async () => {})
+    });
+    // Fresh supervisor instance -> no in-flight promise tracked for this
+    // worker, i.e. exactly the post-restart case status() must reconcile.
+    const supervisor = createWorkerSupervisor({
+      client,
+      stateDir,
+      repoDir,
+      worktreeBaseDir: worktreesDir,
+      runId: "run-race"
+    });
+
+    const statusPromise = supervisor.status(workerId);
+    // Give status() a moment to read 'running' and kick off the slow
+    // getSessionStatus call before abort() runs, so the two genuinely
+    // interleave instead of abort() simply winning a sequential race.
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    const abortPromise = supervisor.abort(workerId, "user requested abort");
+
+    const [statusResult, abortResult] = await Promise.all([statusPromise, abortPromise]);
+    expect(abortResult.state).toBe("aborted");
+    expect(statusResult.state).toBe("aborted");
+
+    const final = await supervisor.status(workerId);
+    expect(final.state).toBe("aborted");
+  });
+});
+
+describe("finalize('merge') git failure", () => {
+  it("keeps state 'verified' and records lastError on an unexpected git failure instead of half-transitioning to 'merged'", async () => {
+    const client = createMockClient();
+    const supervisor = createWorkerSupervisor({
+      client,
+      stateDir,
+      repoDir,
+      worktreeBaseDir: worktreesDir,
+      runId: "run-merge-fail",
+      defaults: { baseRef: "main" }
+    });
+
+    const spawned = await supervisor.spawn({ taskId: "task-merge-fail", prompt: "do the thing" });
+    await waitForState(supervisor, spawned.workerId, ["completed"]);
+    const verified = await supervisor.verify(spawned.workerId, `node -e "process.exit(0)"`);
+    expect(verified.state).toBe("verified");
+
+    // A non-existent target branch makes mergeBranch's `git switch` fail
+    // outright (not a content conflict, which mergeBranch reports normally
+    // instead of throwing) — an "unexpected git failure".
+    await expect(supervisor.finalize(spawned.workerId, "merge", "no-such-branch")).rejects.toThrow();
+
+    const status = await supervisor.status(spawned.workerId);
+    expect(status.state).toBe("verified");
+    expect(status.lastError?.classification).toBe("infra");
+    expect(status.merge).toBeUndefined();
+  });
+});
+
+describe("detached HEAD", () => {
+  it("fails fast at spawn() instead of poisoning the merge target with the literal 'HEAD'", async () => {
+    // Detach HEAD by checking out the commit sha directly rather than the branch.
+    const { stdout } = await runGit(["rev-parse", "HEAD"], repoDir);
+    await runGit(["checkout", stdout.trim()], repoDir);
+
+    const supervisor = createWorkerSupervisor({
+      client: createMockClient(),
+      stateDir,
+      repoDir,
+      worktreeBaseDir: worktreesDir,
+      runId: "run-detached"
+      // defaults.baseRef intentionally omitted: exercises resolveBaseRef's
+      // detached-HEAD guard.
+    });
+
+    const spawned = await supervisor.spawn({ taskId: "task-detached", prompt: "should fail fast" });
+    expect(spawned.state).toBe("failed");
+    expect(spawned.lastError?.message).toMatch(/detached HEAD/i);
+    expect(spawned.worktreePath).toBeUndefined();
   });
 });

@@ -47,13 +47,13 @@
  */
 
 import { randomBytes } from "node:crypto";
-import { stat } from "node:fs/promises";
+import { mkdir, stat, writeFile } from "node:fs/promises";
 import { basename, join, resolve } from "node:path";
 import { z } from "zod";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { loadConfig, resolveModelRoute, type OrchestratorConfig } from "../config/index.js";
-import { atomicWriteJson, readJsonIfExists } from "../lib/fs.js";
+import { readJsonIfExists } from "../lib/fs.js";
 import { openEventLog, type EventLog } from "../events/index.js";
 import { createBudgetTracker, type BudgetTracker } from "../budget/index.js";
 import { createWorkerSupervisor, type WorkerMeta, type WorkerState, type WorkerSupervisor } from "../worker/index.js";
@@ -174,7 +174,18 @@ function formatRunId(nowMs: number): string {
   );
 }
 
-/** Reads `<stateRoot>/current-run.json`, creating it atomically if absent — see ARCHITECTURE.md "State & persistence". */
+/**
+ * Reads `<stateRoot>/current-run.json`, creating it if absent — see
+ * ARCHITECTURE.md "State & persistence". Creation uses an exclusive
+ * (`wx`) write rather than `atomicWriteJson`'s unconditional rename: two
+ * processes racing this function on a fresh `projectDir` (no
+ * `current-run.json` yet) would otherwise each generate their own `runId`
+ * and each unconditionally overwrite the other's write, leaving the
+ * "losing" process operating against a `runDir` that `current-run.json` no
+ * longer references (split-brain run state). `wx` makes the create
+ * itself mutually exclusive: on `EEXIST`, the loser re-reads the file and
+ * converges on the winner's `runId` instead of keeping its own.
+ */
 async function resolveRunId(stateRoot: string, now: () => number): Promise<string> {
   const currentRunPath = join(stateRoot, "current-run.json");
   const existing = await readJsonIfExists<CurrentRun>(currentRunPath);
@@ -182,8 +193,20 @@ async function resolveRunId(stateRoot: string, now: () => number): Promise<strin
     return existing.runId;
   }
   const created: CurrentRun = { runId: formatRunId(now()) };
-  await atomicWriteJson(currentRunPath, created);
-  return created.runId;
+  await mkdir(stateRoot, { recursive: true });
+  try {
+    await writeFile(currentRunPath, JSON.stringify(created, null, 2), { encoding: "utf8", flag: "wx" });
+    return created.runId;
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "EEXIST") {
+      // Another process won the race; converge on its value instead of our own.
+      const winner = await readJsonIfExists<CurrentRun>(currentRunPath);
+      if (winner) {
+        return winner.runId;
+      }
+    }
+    throw err;
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -209,11 +232,32 @@ interface ToolOutcome {
   payload: Record<string, unknown>;
 }
 
+/**
+ * Every tool that accepts a caller-supplied `workerId` (everything except
+ * `spawn_worker`, whose `workerId` is always server-generated via
+ * `randomBytes`) enforces this at the zod schema layer, so an invalid value
+ * never reaches a handler at all. This constant is also enforced again here,
+ * directly at path construction, so any current or future call path through
+ * `workerMetaPath`/`workerEventsPath` — including `runTool`'s own
+ * catch-all, which looks up worker state by `workerId` on ANY thrown error —
+ * can't build a path outside `<runDir>/workers/` even if it isn't reached
+ * via a zod-validated tool input.
+ */
+const WORKER_ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
+
+function assertValidWorkerId(workerId: string): void {
+  if (!WORKER_ID_PATTERN.test(workerId)) {
+    throw new Error(`Invalid workerId '${workerId}': must match ${WORKER_ID_PATTERN.source}`);
+  }
+}
+
 function workerMetaPath(ctx: ServerCtx, workerId: string): string {
+  assertValidWorkerId(workerId);
   return join(ctx.runDir, "workers", workerId, "meta.json");
 }
 
 function workerEventsPath(ctx: ServerCtx, workerId: string): string {
+  assertValidWorkerId(workerId);
   return join(ctx.runDir, "workers", workerId, "events.jsonl");
 }
 
@@ -336,7 +380,11 @@ function registerTools(server: McpServer, ctx: ServerCtx): void {
         "to check whether a spawned worker is still running, completed, or failed, and to see the current budget " +
         "tier before deciding whether to spawn more workers.",
       inputSchema: {
-        workerId: z.string().optional().describe("Worker to poll; omit to poll all workers in this run.")
+        workerId: z
+          .string()
+          .regex(WORKER_ID_PATTERN, "workerId must match ^[A-Za-z0-9_-]{1,64}$")
+          .optional()
+          .describe("Worker to poll; omit to poll all workers in this run.")
       }
     },
     async (input) => runTool(ctx, "worker_status", input.workerId, () => workerStatusHandler(ctx, input))
@@ -366,7 +414,11 @@ function registerTools(server: McpServer, ctx: ServerCtx): void {
         "repeatedly with the returned nextSinceSeq to page through new events while a worker runs. Results are " +
         "capped at 200 events per call — check `truncated` and re-call with the new nextSinceSeq if more remain.",
       inputSchema: {
-        workerId: z.string().min(1).describe("Worker whose event log to read."),
+        workerId: z
+          .string()
+          .min(1)
+          .regex(WORKER_ID_PATTERN, "workerId must match ^[A-Za-z0-9_-]{1,64}$")
+          .describe("Worker whose event log to read."),
         sinceSeq: z.number().int().nonnegative().optional().describe("Only return events with seq greater than this (from a prior call's nextSinceSeq).")
       }
     },
@@ -382,7 +434,11 @@ function registerTools(server: McpServer, ctx: ServerCtx): void {
         "it's off-track or the run is out of budget. Always requires a reason, which is recorded to the run's audit " +
         "trail. Fails if the worker has already reached a terminal state.",
       inputSchema: {
-        workerId: z.string().min(1).describe("Worker to abort."),
+        workerId: z
+          .string()
+          .min(1)
+          .regex(WORKER_ID_PATTERN, "workerId must match ^[A-Za-z0-9_-]{1,64}$")
+          .describe("Worker to abort."),
         reason: z.string().min(1).describe("Why this worker is being aborted; recorded for the audit trail.")
       }
     },
@@ -398,7 +454,11 @@ function registerTools(server: McpServer, ctx: ServerCtx): void {
         "usage, without changing its state. Call this after a worker completes to inspect what it did before " +
         "deciding whether to verify_worker it or abort/discard it.",
       inputSchema: {
-        workerId: z.string().min(1).describe("Worker whose diff/usage to collect.")
+        workerId: z
+          .string()
+          .min(1)
+          .regex(WORKER_ID_PATTERN, "workerId must match ^[A-Za-z0-9_-]{1,64}$")
+          .describe("Worker whose diff/usage to collect.")
       }
     },
     async (input) => runTool(ctx, "collect_worker", input.workerId, () => collectWorkerHandler(ctx, input))
@@ -413,7 +473,11 @@ function registerTools(server: McpServer, ctx: ServerCtx): void {
         "its actual worktree — never trust the worker's own self-reported completion. Required before " +
         "finalize_worker('merge'). Moves the worker to verified or verification_failed based on the real exit code.",
       inputSchema: {
-        workerId: z.string().min(1).describe("Worker to verify; must be completed, verified, or verification_failed."),
+        workerId: z
+          .string()
+          .min(1)
+          .regex(WORKER_ID_PATTERN, "workerId must match ^[A-Za-z0-9_-]{1,64}$")
+          .describe("Worker to verify; must be completed, verified, or verification_failed."),
         command: z.string().min(1).describe("Shell command to run in the worker's worktree, e.g. 'npm test'."),
         timeoutMs: z.number().int().positive().optional().describe("Kill the command if it runs longer than this. Default 300000 (5 min).")
       }
@@ -430,7 +494,11 @@ function registerTools(server: McpServer, ctx: ServerCtx): void {
         "worker's worktree/branch entirely. On a merge conflict this still returns successfully with merged:false " +
         "and the conflicting file list — treat that as a decision point (e.g. discard and replan), not a tool error.",
       inputSchema: {
-        workerId: z.string().min(1).describe("Worker to finalize."),
+        workerId: z
+          .string()
+          .min(1)
+          .regex(WORKER_ID_PATTERN, "workerId must match ^[A-Za-z0-9_-]{1,64}$")
+          .describe("Worker to finalize."),
         action: z.enum(["merge", "discard"]).describe("'merge' requires the worker to be verified; 'discard' works from most terminal-ish states."),
         targetBranch: z.string().optional().describe("Branch to merge into; defaults to the run's base branch.")
       }
@@ -491,6 +559,24 @@ async function spawnWorkerHandler(ctx: ServerCtx, input: SpawnWorkerInput): Prom
     agentId: input.agentId,
     workerId
   });
+
+  if (meta.state === "failed") {
+    // supervisor.spawn() never rejects on a bootstrap failure (ensureServer/
+    // createWorktree/createSession) — it resolves with a 'failed' WorkerMeta
+    // instead. Report that as an isError so the caller doesn't mistake it for
+    // a started worker, and release the reservation since nothing was spent.
+    await ctx.budget.reconcile(workerId, 0);
+    return {
+      isError: true,
+      workerId: meta.workerId,
+      payload: {
+        error: meta.lastError?.message ?? "worker spawn failed",
+        workerId: meta.workerId,
+        state: meta.state,
+        tier: ctx.budget.snapshot().tier
+      }
+    };
+  }
 
   return {
     workerId: meta.workerId,

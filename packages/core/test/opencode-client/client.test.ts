@@ -1,7 +1,7 @@
 import type { ChildProcess } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { EventEmitter } from "node:events";
-import { mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, rm, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -120,6 +120,45 @@ describe("ensureServer", () => {
     await expect(
       client.ensureServer({ stateDir, port: fake.port, binaryPath: "does-not-exist" })
     ).rejects.toThrow(OpencodeTransportError);
+  });
+
+  it("converges two concurrent ensureServer calls on the same stateDir onto exactly one live server", async () => {
+    let spawnCount = 0;
+    const spawnFn: SpawnFn = (...args) => {
+      spawnCount++;
+      return fakeSpawnFn(4242)(...args);
+    };
+    const client = createOpencodeClient({ spawnFn, processAlive: () => true });
+
+    const [a, b] = await Promise.all([
+      client.ensureServer({ stateDir, port: fake.port, binaryPath: "fake-opencode" }),
+      client.ensureServer({ stateDir, port: fake.port, binaryPath: "fake-opencode" })
+    ]);
+
+    // The lock around the check-spawn-persist section means the second
+    // caller waits for the first to finish and persist server.json, then
+    // attaches to it instead of racing its own `opencode serve` -- so
+    // exactly one process is ever spawned, and there is no "loser" process
+    // that needs to be found and killed afterwards.
+    expect(spawnCount).toBe(1);
+    expect(a.baseUrl).toBe(fake.baseUrl);
+    expect(b.baseUrl).toBe(fake.baseUrl);
+    expect(a.pid).toBe(4242);
+    expect(b.pid).toBe(4242);
+    // Exactly one of the two calls should report having done the spawning.
+    expect([a.spawned, b.spawned].filter(Boolean)).toHaveLength(1);
+  });
+
+  it("reclaims a stale lock left behind by a crashed holder instead of waiting on it forever", async () => {
+    const lockPath = join(stateDir, "server.lock");
+    await writeFile(lockPath, "99999999", "utf8");
+    const past = new Date(Date.now() - 60_000);
+    await utimes(lockPath, past, past);
+
+    const client = createOpencodeClient({ spawnFn: fakeSpawnFn(8181), processAlive: () => true });
+    const handle = await client.ensureServer({ stateDir, port: fake.port, binaryPath: "fake-opencode" });
+
+    expect(handle).toEqual({ baseUrl: fake.baseUrl, pid: 8181, spawned: true });
   });
 });
 

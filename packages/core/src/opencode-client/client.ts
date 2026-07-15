@@ -12,7 +12,7 @@
  */
 
 import { spawn } from "node:child_process";
-import { mkdir } from "node:fs/promises";
+import { mkdir, rm, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { atomicWriteJson, readJsonIfExists } from "../lib/fs.js";
 import {
@@ -42,6 +42,13 @@ const DEFAULT_TIMEOUT_MS = 30_000;
 const PING_TIMEOUT_MS = 2_000;
 const SERVER_READY_TIMEOUT_MS = 15_000;
 const SERVER_READY_POLL_MS = 300;
+
+// Longer than SERVER_READY_TIMEOUT_MS: a lock is only ever reclaimed once
+// it's older than the longest a legitimate holder could still be spawning
+// and polling for readiness.
+const SERVER_LOCK_STALE_MS = 20_000;
+const SERVER_LOCK_RETRY_MS = 50;
+const SERVER_LOCK_ACQUIRE_TIMEOUT_MS = 30_000;
 
 export interface OpencodeClientDeps {
   fetchFn: FetchFn;
@@ -93,6 +100,54 @@ interface UpstreamEvent {
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * Exclusive-create lock (`flag: "wx"`) serializing `ensureServer`'s
+ * check-spawn-persist section across processes so two concurrent callers
+ * against the same stateDir never both spawn their own `opencode serve`.
+ * Stale-lock tolerant: a lock older than SERVER_LOCK_STALE_MS is assumed to
+ * belong to a crashed holder and is reclaimed rather than waited on forever.
+ *
+ * ponytail: staleness is judged purely by the lock file's mtime, not the
+ * liveness of whatever process created it. If a legitimate holder's
+ * spawn+ready-poll genuinely takes longer than SERVER_LOCK_STALE_MS (e.g.
+ * antivirus scanning stalls the child), a waiter can reclaim the lock as
+ * abandoned and spawn a second server. Checking the lock owner's own PID
+ * for liveness would close this but adds cross-platform PID-liveness
+ * plumbing not justified by how narrow this window is.
+ */
+async function acquireServerLock(lockPath: string): Promise<void> {
+  const deadline = Date.now() + SERVER_LOCK_ACQUIRE_TIMEOUT_MS;
+  for (;;) {
+    try {
+      await writeFile(lockPath, String(process.pid), { encoding: "utf8", flag: "wx" });
+      return;
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== "EEXIST") throw err;
+
+      try {
+        const info = await stat(lockPath);
+        if (Date.now() - info.mtimeMs > SERVER_LOCK_STALE_MS) {
+          await rm(lockPath, { force: true });
+          continue;
+        }
+      } catch {
+        // Lock vanished between our EEXIST and this stat (the holder just
+        // released it) -- loop straight back to the create attempt.
+        continue;
+      }
+
+      if (Date.now() > deadline) {
+        throw new OpencodeTransportError(`timed out waiting for ensureServer lock at ${lockPath}`);
+      }
+      await sleep(SERVER_LOCK_RETRY_MS);
+    }
+  }
+}
+
+async function releaseServerLock(lockPath: string): Promise<void> {
+  await rm(lockPath, { force: true });
 }
 
 function sessionToUsage(session: UpstreamSession): SessionUsage {
@@ -207,41 +262,61 @@ export function createOpencodeClient(deps: Partial<OpencodeClientDeps> = {}): Op
       return { baseUrl: existing.baseUrl, pid: existing.pid, spawned: false };
     }
 
-    const port = opts.port ?? (await getFreePort());
-    const hostname = "127.0.0.1";
-    const baseUrl = `http://${hostname}:${port}`;
-    const logFile = opts.logFile ?? join(opts.stateDir, "opencode-serve.log");
-    const binaryPath = opts.binaryPath ?? "opencode";
-
-    const { pid } = await spawnDetachedServer({
-      binaryPath,
-      port,
-      hostname,
-      cwd: opts.stateDir,
-      env: opts.env,
-      logFile,
-      spawnFn
-    });
-
-    const deadline = Date.now() + SERVER_READY_TIMEOUT_MS;
-    let ready = false;
-    while (Date.now() < deadline) {
-      if (await ping(baseUrl)) {
-        ready = true;
-        break;
+    // No live server on record -- serialize the check-spawn-persist
+    // sequence across processes with an exclusive-create lock file so two
+    // concurrent callers against the same stateDir never both spawn their
+    // own `opencode serve` (the module doc above anticipates exactly this:
+    // two server instances pointed at the same projectDir converging on one
+    // opencode process).
+    const lockPath = join(opts.stateDir, "server.lock");
+    await acquireServerLock(lockPath);
+    try {
+      // Whoever we were waiting on may have just spawned and persisted
+      // server.json while we were blocked on the lock -- re-check before
+      // spawning a second one.
+      const afterLock = await readJsonIfExists<ServerJson>(serverJsonPath);
+      if (afterLock && processAlive(afterLock.pid) && (await ping(afterLock.baseUrl))) {
+        return { baseUrl: afterLock.baseUrl, pid: afterLock.pid, spawned: false };
       }
-      await sleep(SERVER_READY_POLL_MS);
-    }
-    if (!ready) {
-      throw new OpencodeTransportError(
-        `opencode serve (pid ${pid}) did not become ready within ${SERVER_READY_TIMEOUT_MS}ms on ${baseUrl}; see ${logFile}`
-      );
-    }
 
-    const serverJson: ServerJson = { pid, port, baseUrl, startedAt: Date.now() };
-    await atomicWriteJson(serverJsonPath, serverJson);
+      const port = opts.port ?? (await getFreePort());
+      const hostname = "127.0.0.1";
+      const baseUrl = `http://${hostname}:${port}`;
+      const logFile = opts.logFile ?? join(opts.stateDir, "opencode-serve.log");
+      const binaryPath = opts.binaryPath ?? "opencode";
 
-    return { baseUrl, pid, spawned: true };
+      const { pid } = await spawnDetachedServer({
+        binaryPath,
+        port,
+        hostname,
+        cwd: opts.stateDir,
+        env: opts.env,
+        logFile,
+        spawnFn
+      });
+
+      const deadline = Date.now() + SERVER_READY_TIMEOUT_MS;
+      let ready = false;
+      while (Date.now() < deadline) {
+        if (await ping(baseUrl)) {
+          ready = true;
+          break;
+        }
+        await sleep(SERVER_READY_POLL_MS);
+      }
+      if (!ready) {
+        throw new OpencodeTransportError(
+          `opencode serve (pid ${pid}) did not become ready within ${SERVER_READY_TIMEOUT_MS}ms on ${baseUrl}; see ${logFile}`
+        );
+      }
+
+      const serverJson: ServerJson = { pid, port, baseUrl, startedAt: Date.now() };
+      await atomicWriteJson(serverJsonPath, serverJson);
+
+      return { baseUrl, pid, spawned: true };
+    } finally {
+      await releaseServerLock(lockPath);
+    }
   }
 
   async function createSession(baseUrl: string, opts: CreateSessionOptions): Promise<SessionInfo> {

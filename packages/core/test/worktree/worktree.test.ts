@@ -3,7 +3,7 @@ import { mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { runGit } from "../../src/worktree/git.js";
+import { GitCommandError, runGit } from "../../src/worktree/git.js";
 import {
   createWorktree,
   listWorktrees,
@@ -11,6 +11,7 @@ import {
   removeWorktree,
   worktreePathFor
 } from "../../src/worktree/index.js";
+import type { RunGitFn } from "../../src/worktree/merge.js";
 
 let root: string;
 let repoDir: string;
@@ -227,5 +228,84 @@ describe("mergeBranch", () => {
 
     await removeWorktree({ repoDir, worktreePath: wtA, deleteBranch: "feature/a" });
     await removeWorktree({ repoDir, worktreePath: wtB, deleteBranch: "feature/b" });
+  });
+
+  it("rejects a targetBranch that looks like a git flag, with no git side effects", async () => {
+    const { stdout: before } = await runGit(["rev-parse", "HEAD"], repoDir);
+
+    await expect(
+      mergeBranch({ repoDir, sourceBranch: "main", targetBranch: "--force" })
+    ).rejects.toThrow(/invalid targetBranch/i);
+
+    const { stdout: after } = await runGit(["rev-parse", "HEAD"], repoDir);
+    expect(after).toBe(before);
+    const { stdout: status } = await runGit(["status", "--porcelain"], repoDir);
+    expect(status.trim()).toBe("");
+    const { stdout: branch } = await runGit(["rev-parse", "--abbrev-ref", "HEAD"], repoDir);
+    expect(branch.trim()).toBe("main");
+  });
+
+  it("rejects a sourceBranch that looks like a git flag, with no git side effects", async () => {
+    await expect(
+      mergeBranch({ repoDir, sourceBranch: "-x", targetBranch: "main" })
+    ).rejects.toThrow(/invalid sourceBranch/i);
+
+    const { stdout: status } = await runGit(["status", "--porcelain"], repoDir);
+    expect(status.trim()).toBe("");
+  });
+
+  it("throws a combined error naming both the conflict and the failed abort, instead of swallowing an abort failure", async () => {
+    const wtA = worktreePathFor(worktreesDir, "run-8", "worker-a");
+    const wtB = worktreePathFor(worktreesDir, "run-8", "worker-b");
+
+    await createWorktree({ repoDir, worktreePath: wtA, branchName: "feature/abort-a" });
+    await createWorktree({ repoDir, worktreePath: wtB, branchName: "feature/abort-b" });
+
+    await writeFile(join(wtA, "file.txt"), "line1-from-a\n", "utf8");
+    await runGit(["commit", "-am", "a changes line1"], wtA);
+
+    await writeFile(join(wtB, "file.txt"), "line1-from-b\n", "utf8");
+    await runGit(["commit", "-am", "b changes line1"], wtB);
+
+    await mergeBranch({ repoDir, sourceBranch: "feature/abort-a", targetBranch: "main" });
+
+    // Injectable seam: pass every call through to the real `runGit` except
+    // `git merge --abort`, which is forced to fail with a non-"nothing to
+    // abort" error (simulating e.g. a Windows AV/OneDrive file lock).
+    const failingAbort: RunGitFn = async (args, cwd) => {
+      if (args[0] === "merge" && args[1] === "--abort") {
+        throw new GitCommandError(
+          "git merge --abort failed in " + cwd + ": simulated lock failure",
+          args,
+          "fatal: Unable to create '.git/index.lock': File exists."
+        );
+      }
+      return runGit(args, cwd);
+    };
+
+    let caught: unknown;
+    try {
+      await mergeBranch(
+        { repoDir, sourceBranch: "feature/abort-b", targetBranch: "main" },
+        { runGit: failingAbort }
+      );
+    } catch (err) {
+      caught = err;
+    }
+
+    expect(caught).toBeInstanceOf(Error);
+    const message = (caught as Error).message;
+    expect(message).toContain(repoDir);
+    expect(message).toMatch(/abort/i);
+    expect(message).toMatch(/manual attention/i);
+
+    // The simulated abort failure means the real conflict was never really
+    // cleaned up — repo is genuinely left mid-merge, matching the error.
+    expect(await pathExists(join(repoDir, ".git", "MERGE_HEAD"))).toBe(true);
+
+    // Clean up for real so afterEach's rm doesn't leave anything unexpected.
+    await runGit(["merge", "--abort"], repoDir).catch(() => {});
+    await removeWorktree({ repoDir, worktreePath: wtA, deleteBranch: "feature/abort-a" });
+    await removeWorktree({ repoDir, worktreePath: wtB, deleteBranch: "feature/abort-b" });
   });
 });

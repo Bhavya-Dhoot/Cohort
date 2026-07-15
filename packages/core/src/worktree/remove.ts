@@ -38,7 +38,9 @@ export async function removeWorktree(opts: RemoveWorktreeOptions): Promise<void>
   }
 
   if (deleteBranch && (await branchExists(repoDir, deleteBranch))) {
-    await runGit(["branch", "-D", deleteBranch], repoDir);
+    // `--` guards against a `deleteBranch` value starting with `-` being
+    // parsed as a flag instead of a ref (same class of issue as merge.ts).
+    await runGit(["branch", "-D", "--", deleteBranch], repoDir);
   }
 
   await runGit(["worktree", "prune"], repoDir);

@@ -61,12 +61,29 @@ async function resolveOnPath(name: string): Promise<string | undefined> {
   }
 }
 
-/** Extracts the `%dp0%\...\*.exe` target from an npm-generated .cmd shim. */
+/**
+ * Extracts the `%dp0%\...\*.exe` target from an npm-generated .cmd shim.
+ *
+ * npm's standard cmd-shim template for JS-entrypoint CLIs (npm.cmd, npx.cmd,
+ * and most globally-installed Node CLIs) opens with a node-detection
+ * preamble -- `IF EXIST "%dp0%\node.exe" ( SET "_prog=%dp0%\node.exe" )
+ * ELSE (...)` -- before the actual invocation line. That preamble's
+ * `%dp0%` reference resolves to node.exe itself, not the target binary, so
+ * taking the FIRST `%dp0%` occurrence (as this used to) picks the wrong
+ * path whenever node.exe happens to be co-located with the shim (the
+ * default layout on nvm-windows/Volta). The real target is always on the
+ * final invocation line, so take the LAST `%dp0%` occurrence instead: for a
+ * single-line shim with no preamble (e.g. opencode.cmd) this is the same
+ * occurrence either way; for the npm-style preamble it lands on the actual
+ * command line, whose extracted target is the JS entry file rather than an
+ * `.exe`, correctly failing the suffix check below and falling through to
+ * the shell:true fallback in `resolveExecutable`.
+ */
 async function extractExeFromShim(shimPath: string): Promise<string | undefined> {
   try {
     const content = await readFile(shimPath, "utf8");
     const marker = "%dp0%";
-    const idx = content.indexOf(marker);
+    const idx = content.lastIndexOf(marker);
     if (idx === -1) return undefined;
 
     let rest = content.slice(idx + marker.length);

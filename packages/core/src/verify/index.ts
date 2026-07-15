@@ -1,5 +1,8 @@
 import { execFile, spawn, type ChildProcess } from "node:child_process";
 
+/** Kills `child`'s whole process tree. See {@link runVerification}. */
+export type KillProcessTreeFn = (child: ChildProcess, isWindows: boolean) => Promise<void>;
+
 /**
  * Options for {@link runVerification}.
  */
@@ -12,6 +15,8 @@ export interface RunVerificationOptions {
   timeoutMs?: number;
   /** Truncate stdout/stderr independently once either exceeds this many bytes. Default 200_000. */
   maxOutputBytes?: number;
+  /** Test seam: overrides how the process tree is killed on timeout. Defaults to the real OS kill. */
+  killProcessTree?: KillProcessTreeFn;
 }
 
 /**
@@ -30,6 +35,14 @@ export interface VerifyResult {
 
 const DEFAULT_TIMEOUT_MS = 300_000;
 const DEFAULT_MAX_OUTPUT_BYTES = 200_000;
+/**
+ * How long to wait for the child's `close` event after issuing a (retried)
+ * kill, before giving up on the OS ever reporting the process as gone and
+ * settling anyway. Without this backstop, a kill that silently fails (e.g.
+ * `taskkill` denied by AV/EDR, or a reparented grandchild outside the killed
+ * tree) leaves the returned promise pending forever.
+ */
+const KILL_GRACE_MS = 5_000;
 
 /**
  * Runs a configured shell command against a worker's worktree and reports
@@ -44,6 +57,12 @@ const DEFAULT_MAX_OUTPUT_BYTES = 200_000;
  * detached and signaling the whole process group) — a plain `child.kill()`
  * would leave grandchildren (e.g. the real process behind an `npm`/`cmd`
  * wrapper) running on Windows.
+ *
+ * This promise ALWAYS settles. The kill on timeout is retried once, then
+ * `close` is raced against a {@link KILL_GRACE_MS} grace timer — if the OS
+ * still hasn't reported the process as exited by then, the promise resolves
+ * with `{ timedOut: true, passed: false }` and a `[verify]` marker appended
+ * to `stderr` noting the kill may have failed, rather than hanging forever.
  */
 export function runVerification(
   opts: RunVerificationOptions
@@ -52,10 +71,12 @@ export function runVerification(
   const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const maxOutputBytes = opts.maxOutputBytes ?? DEFAULT_MAX_OUTPUT_BYTES;
   const isWindows = process.platform === "win32";
+  const killFn = opts.killProcessTree ?? killProcessTree;
 
   return new Promise<VerifyResult>((resolve, reject) => {
     const startedAt = Date.now();
     let settled = false;
+    let graceTimer: NodeJS.Timeout | undefined;
 
     const child = spawn(command, {
       cwd,
@@ -72,9 +93,47 @@ export function runVerification(
     const stderr = makeOutputCollector(maxOutputBytes);
     let timedOut = false;
 
+    /** Gives up waiting for the OS to report the process as exited. */
+    function settleAsTimedOut(): void {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      if (graceTimer) clearTimeout(graceTimer);
+      stderr.push(
+        Buffer.from(
+          `\n[verify] kill may have failed; process may still be running (pid ${child.pid ?? "unknown"})\n`,
+          "utf8"
+        )
+      );
+      // Give up on this child: stop listening and let the parent event loop
+      // exit even if the OS process (or a reparented descendant) lingers.
+      child.stdout?.removeAllListeners();
+      child.stderr?.removeAllListeners();
+      child.stdout?.destroy();
+      child.stderr?.destroy();
+      child.removeAllListeners();
+      child.unref();
+      resolve({
+        passed: false,
+        exitCode: null,
+        stdout: stdout.value(),
+        stderr: stderr.value(),
+        durationMs: Date.now() - startedAt,
+        timedOut: true,
+        truncated: stdout.truncated() || stderr.truncated()
+      });
+    }
+
     const timer = setTimeout(() => {
       timedOut = true;
-      void killProcessTree(child, isWindows);
+      void (async () => {
+        await killFn(child, isWindows).catch(() => {});
+        if (settled) return;
+        // One retry before giving the OS a grace window to report `close`.
+        await killFn(child, isWindows).catch(() => {});
+        if (settled) return;
+        graceTimer = setTimeout(settleAsTimedOut, KILL_GRACE_MS);
+      })();
     }, timeoutMs);
 
     child.stdout?.on("data", (chunk: Buffer) => stdout.push(chunk));
@@ -88,6 +147,7 @@ export function runVerification(
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      if (graceTimer) clearTimeout(graceTimer);
       reject(
         new Error(
           `Failed to run verification command "${command}" in "${cwd}": ${err.message}`
@@ -99,6 +159,7 @@ export function runVerification(
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      if (graceTimer) clearTimeout(graceTimer);
       resolve({
         passed: code === 0 && !timedOut,
         exitCode: code,

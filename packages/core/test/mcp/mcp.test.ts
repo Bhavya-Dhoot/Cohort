@@ -75,11 +75,15 @@ interface Harness {
   close(): Promise<void>;
 }
 
-async function setupServer(opencodeClient: OpencodeClient, forProjectDir = projectDir): Promise<Harness> {
+async function setupServer(
+  opencodeClient: OpencodeClient,
+  forProjectDir = projectDir,
+  now?: () => number
+): Promise<Harness> {
   const agentic = await createAgenticMcpServer({
     projectDir: forProjectDir,
     platformConfigDir: PLATFORM_CONFIG_DIR,
-    deps: { client: opencodeClient }
+    deps: now ? { client: opencodeClient, now } : { client: opencodeClient }
   });
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   await agentic.server.connect(serverTransport);
@@ -105,7 +109,18 @@ async function callTool(client: Client, name: string, args: Record<string, unkno
   const result = await client.callTool({ name, arguments: args });
   const content = result.content as Array<{ type: string; text?: string }>;
   const first = content[0];
-  const data = first?.type === "text" && first.text ? JSON.parse(first.text) : undefined;
+  let data: unknown;
+  if (first?.type === "text" && first.text) {
+    // A schema-level rejection (e.g. a `.regex()` mismatch) is turned into a
+    // clean `isError` result by the MCP SDK itself, but its text is a plain
+    // McpError message rather than our own tool handlers' JSON payload —
+    // fall back to wrapping the raw text instead of throwing on JSON.parse.
+    try {
+      data = JSON.parse(first.text);
+    } catch {
+      data = { error: first.text };
+    }
+  }
   return { isError: Boolean(result.isError), data };
 }
 
@@ -453,6 +468,139 @@ describe("unknown workerId", () => {
       expect(res.data.workerId).toBe("does-not-exist");
     } finally {
       await close();
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// workerId path traversal (F0)
+// ---------------------------------------------------------------------------
+
+describe("workerId path traversal", () => {
+  it("worker_status rejects a traversal workerId with a clean isError and creates no worker directory", async () => {
+    const client = createMockClient();
+    const { client: mcp, close } = await setupServer(client);
+    try {
+      const evilId = "..\\..\\evil";
+      const res = await callTool(mcp, "worker_status", { workerId: evilId });
+      expect(res.isError).toBe(true);
+      expect(String(res.data.error)).toMatch(/workerId/);
+
+      const runId = await readRunId(projectDir);
+      const workersDir = join(projectDir, ".agentic-os", "runs", runId, "workers");
+      const entries = await readdir(workersDir).catch(() => []);
+      expect(entries).toEqual([]);
+
+      // Nothing was ever created outside the run's own state root.
+      expect(await pathExists(join(projectDir, "..", "evil"))).toBe(false);
+      expect(await pathExists(join(projectDir, "evil"))).toBe(false);
+    } finally {
+      await close();
+    }
+  });
+
+  it("stream_worker_log rejects a traversal workerId with a clean isError and creates no worker directory", async () => {
+    const client = createMockClient();
+    const { client: mcp, close } = await setupServer(client);
+    try {
+      const evilId = "..\\..\\evil";
+      const res = await callTool(mcp, "stream_worker_log", { workerId: evilId });
+      expect(res.isError).toBe(true);
+      expect(String(res.data.error)).toMatch(/workerId/);
+
+      const runId = await readRunId(projectDir);
+      const workersDir = join(projectDir, ".agentic-os", "runs", runId, "workers");
+      const entries = await readdir(workersDir).catch(() => []);
+      expect(entries).toEqual([]);
+      expect(await pathExists(join(projectDir, "..", "evil"))).toBe(false);
+    } finally {
+      await close();
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// spawn_worker infra failure (F4)
+// ---------------------------------------------------------------------------
+
+describe("spawn_worker infra failure", () => {
+  it("reports isError with lastError+state instead of a success payload, and releases the reservation", async () => {
+    // Force zero infra retries so the failure surfaces on the first attempt
+    // with no backoff sleep (DEFAULT_INFRA_BACKOFF_MS would otherwise delay
+    // this test by seconds).
+    await mkdir(join(projectDir, ".agentic-os", "config"), { recursive: true });
+    await writeFile(
+      join(projectDir, ".agentic-os", "config", "orchestrator.yaml"),
+      "worker:\n  infraRetryMax: 0\n",
+      "utf8"
+    );
+
+    const client = createMockClient({
+      ensureServer: vi.fn(async () => {
+        throw new Error("spawn opencode serve ENOENT: binary not found");
+      })
+    });
+    const { client: mcp, close } = await setupServer(client);
+    try {
+      const spawned = await callTool(mcp, "spawn_worker", { taskId: "task-infra-fail", prompt: "do the thing" });
+      expect(spawned.isError).toBe(true);
+      expect(spawned.data.state).toBe("failed");
+      expect(typeof spawned.data.error).toBe("string");
+      expect(spawned.data.error).toMatch(/ENOENT|binary not found/);
+      expect(spawned.data.workerId).toBeTruthy();
+
+      // The default $0.50 reservation must be released, not leaked forever.
+      const status = await callTool(mcp, "worker_status", {});
+      expect(status.data.budget.reservedUsd).toBe(0);
+      expect(status.data.budget.committedUsd).toBe(0);
+    } finally {
+      await close();
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// resolveRunId TOCTOU (F5/F12)
+// ---------------------------------------------------------------------------
+
+describe("resolveRunId TOCTOU", () => {
+  it("two servers racing to create current-run.json on a fresh projectDir converge on the same runId", async () => {
+    const client = createMockClient({
+      prompt: vi.fn(async () => ({ outcome: "completed", eventCount: 0 }))
+    });
+
+    // Distinct `now()` clocks force the two racing processes to generate
+    // two DIFFERENT candidate runIds (formatRunId has 1-second granularity),
+    // so this actually exercises the create-if-absent/EEXIST convergence
+    // path rather than accidentally coinciding on the same timestamp.
+    const [a, b] = await Promise.all([
+      setupServer(client, projectDir, () => 1751500000000),
+      setupServer(client, projectDir, () => 1751500009000)
+    ]);
+    try {
+      const spawnedA = await callTool(a.client, "spawn_worker", { taskId: "race-a", prompt: "a" });
+      const spawnedB = await callTool(b.client, "spawn_worker", { taskId: "race-b", prompt: "b" });
+      expect(spawnedA.isError).toBeFalsy();
+      expect(spawnedB.isError).toBeFalsy();
+      const workerIdA = spawnedA.data.workerId as string;
+      const workerIdB = spawnedB.data.workerId as string;
+
+      // Only one runId was ever persisted, and both workers landed under it.
+      const runId = await readRunId(projectDir);
+      const workersDir = join(projectDir, ".agentic-os", "runs", runId, "workers");
+      const entries = (await readdir(workersDir)).sort();
+      expect(entries).toEqual([workerIdA, workerIdB].sort());
+
+      // Server "a" can see server "b"'s worker through its own supervisor --
+      // proof both processes resolved the identical runId in-memory (and
+      // therefore share one worker registry/budget), not just that they
+      // happened to write the same file on disk.
+      const listedFromA = await callTool(a.client, "list_workers", {});
+      const idsFromA = (listedFromA.data.workers as Array<{ workerId: string }>).map((w) => w.workerId);
+      expect(idsFromA).toEqual(expect.arrayContaining([workerIdA, workerIdB]));
+    } finally {
+      await a.close();
+      await b.close();
     }
   });
 });

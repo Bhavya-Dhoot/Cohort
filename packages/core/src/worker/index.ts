@@ -46,7 +46,7 @@ import { readdir } from "node:fs/promises";
 import { join } from "node:path";
 import { atomicWriteJson, readJsonIfExists } from "../lib/fs.js";
 import { openEventLog, type EventLog } from "../events/index.js";
-import { runVerification } from "../verify/index.js";
+import { runVerification, type VerifyResult } from "../verify/index.js";
 import { createWorktree, mergeBranch, removeWorktree, runGit, worktreePathFor } from "../worktree/index.js";
 import type { NormalizedEvent, OpencodeClient, PromptResult } from "../opencode-client/types.js";
 import type {
@@ -90,6 +90,7 @@ const DISCARDABLE_STATES: readonly WorkerState[] = [
   "verified"
 ];
 const CRASHED_MID_SPAWN_STATES: readonly WorkerState[] = [
+  "created",
   "worktree_provisioning",
   "worktree_ready",
   "session_starting"
@@ -282,7 +283,18 @@ async function resolveBaseRef(ctx: Ctx): Promise<string> {
     return ctx.baseRef;
   }
   const { stdout } = await runGit(["rev-parse", "--abbrev-ref", "HEAD"], ctx.repoDir);
-  return stdout.trim();
+  const ref = stdout.trim();
+  if (ref === "HEAD") {
+    // `git rev-parse --abbrev-ref HEAD` prints the literal string "HEAD"
+    // when repoDir is in detached-HEAD state — not a usable branch name.
+    // Fail fast here (before any worktree is created) instead of silently
+    // persisting "HEAD" as meta.baseRef and only discovering the problem
+    // when finalize("merge") later calls `git switch HEAD` and throws.
+    throw new Error(
+      "repository must be on a branch; detached HEAD unsupported in M1"
+    );
+  }
+  return ref;
 }
 
 // ---------------------------------------------------------------------------
@@ -512,52 +524,81 @@ async function onTimeout(ctx: Ctx, workerId: string, controller: AbortController
 // status / list
 // ---------------------------------------------------------------------------
 
+/**
+ * Post-restart reconciliation for a worker stuck at `running` with no
+ * in-process promise tracking it: polls the live session and, if it's no
+ * longer busy, moves the worker to a terminal state.
+ *
+ * The `getSessionStatus` round-trip below is a window in which a concurrent
+ * writer — most notably `abortWorker`, which targets the exact same
+ * `state === "running"` condition — can legally transition this worker away
+ * from `running` before this function decides what to persist. To avoid
+ * clobbering that, the read-decide-write is redone atomically as a single
+ * `withWorkerIo` step right before persisting: only if the freshest on-disk
+ * state is *still* `running` at that instant does the reconciled state get
+ * written. Otherwise the fresher state (e.g. `aborted`) wins untouched.
+ */
+async function reconcileRunningWorker(ctx: Ctx, workerId: string, meta: WorkerMeta): Promise<WorkerMeta> {
+  let next: { state: "completed" | "orphaned"; lastError?: WorkerMeta["lastError"]; reason?: string } | undefined;
+
+  try {
+    if (!meta.baseUrl || !meta.sessionId) {
+      throw new Error("worker is 'running' but has no baseUrl/sessionId to poll");
+    }
+    const sessionStatus = await ctx.client.getSessionStatus(meta.baseUrl, meta.sessionId);
+    if (sessionStatus.state === "idle") {
+      next = { state: "completed", reason: "reconciled via status()" };
+    } else if (sessionStatus.state === "unknown") {
+      next = {
+        state: "orphaned",
+        lastError: { message: "session status unknown after restart", classification: "infra" }
+      };
+    }
+    // "busy" -> still running, nothing to reconcile.
+  } catch (err) {
+    next = {
+      state: "orphaned",
+      lastError: { message: errMessage(err), classification: "infra" },
+      reason: errMessage(err)
+    };
+  }
+
+  if (!next) {
+    return meta;
+  }
+
+  return withWorkerIo(ctx, workerId, async () => {
+    const fresh = await readJsonIfExists<WorkerMeta>(metaPath(ctx, workerId));
+    if (!fresh || fresh.state !== "running") {
+      // A concurrent writer (e.g. abortWorker) already moved this worker
+      // off 'running' while the getSessionStatus round-trip above was in
+      // flight — leave it alone rather than overwriting a newer state.
+      return fresh ?? meta;
+    }
+    const written: WorkerMeta = {
+      ...fresh,
+      state: next.state,
+      lastError: next.lastError ?? fresh.lastError,
+      updatedAt: Date.now()
+    };
+    await atomicWriteJson(metaPath(ctx, workerId), written);
+    await logEvent(ctx, workerId, {
+      type: "state",
+      from: "running",
+      to: next.state,
+      ...(next.reason ? { reason: next.reason } : {})
+    });
+    return written;
+  });
+}
+
 async function statusWorker(ctx: Ctx, workerId: string): Promise<WorkerMeta> {
   let meta = await loadMeta(ctx, workerId);
 
   if (meta.state === "running" && !ctx.inFlight.has(workerId)) {
     // Post-restart case: no in-process promise is tracking this worker's
     // prompt turn, so reconcile against the live session instead.
-    try {
-      if (!meta.baseUrl || !meta.sessionId) {
-        throw new Error("worker is 'running' but has no baseUrl/sessionId to poll");
-      }
-      const sessionStatus = await ctx.client.getSessionStatus(meta.baseUrl, meta.sessionId);
-      if (sessionStatus.state === "idle") {
-        meta = { ...meta, state: "completed", updatedAt: Date.now() };
-        await persist(ctx, meta);
-        await logEvent(ctx, workerId, {
-          type: "state",
-          from: "running",
-          to: "completed",
-          reason: "reconciled via status()"
-        });
-      } else if (sessionStatus.state === "unknown") {
-        meta = {
-          ...meta,
-          state: "orphaned",
-          lastError: { message: "session status unknown after restart", classification: "infra" },
-          updatedAt: Date.now()
-        };
-        await persist(ctx, meta);
-        await logEvent(ctx, workerId, { type: "state", from: "running", to: "orphaned" });
-      }
-      // "busy" -> still running, nothing to reconcile.
-    } catch (err) {
-      meta = {
-        ...meta,
-        state: "orphaned",
-        lastError: { message: errMessage(err), classification: "infra" },
-        updatedAt: Date.now()
-      };
-      await persist(ctx, meta);
-      await logEvent(ctx, workerId, {
-        type: "state",
-        from: "running",
-        to: "orphaned",
-        reason: meta.lastError!.message
-      });
-    }
+    meta = await reconcileRunningWorker(ctx, workerId, meta);
   }
 
   if (meta.baseUrl && meta.sessionId) {
@@ -668,7 +709,32 @@ async function verifyWorker(ctx: Ctx, workerId: string, command: string, timeout
   await persist(ctx, meta);
   await logEvent(ctx, workerId, { type: "state", from, to: "verifying" });
 
-  const result = await runVerification({ cwd: worktreePath, command, timeoutMs });
+  let result: VerifyResult;
+  try {
+    result = await runVerification({ cwd: worktreePath, command, timeoutMs });
+  } catch (err) {
+    // runVerification() rejects (rather than resolving {passed:false}) only
+    // for a process/transport-layer failure (e.g. the worktree vanished
+    // out from under us) — not a failing command. 'verifying' is absent
+    // from every other state-list constant in this module, so leaving it
+    // persisted here would wedge the worker forever; revert to 'completed'
+    // (which VERIFIABLE_STATES does include, so a retry is still possible)
+    // and rethrow so the caller still sees the failure.
+    meta = {
+      ...meta,
+      state: "completed",
+      lastError: { message: errMessage(err), classification: "infra" },
+      updatedAt: Date.now()
+    };
+    await persist(ctx, meta);
+    await logEvent(ctx, workerId, {
+      type: "state",
+      from: "verifying",
+      to: "completed",
+      reason: meta.lastError!.message
+    });
+    throw err;
+  }
   const nextState: WorkerState = result.passed ? "verified" : "verification_failed";
 
   meta = {
@@ -724,42 +790,62 @@ async function finalizeWorker(
   if (!meta.worktreePath || !meta.branchName) {
     throw new Error(`Worker '${workerId}' has no worktree/branch to merge`);
   }
+  const worktreePath = meta.worktreePath;
+  const branchName = meta.branchName;
 
-  // Workers may or may not commit their own work; finalize commits
-  // whatever is left uncommitted so the merge captures it.
-  const dirty = await runGit(["status", "--porcelain"], meta.worktreePath);
-  if (dirty.stdout.trim().length > 0) {
-    await runGit(["add", "-A"], meta.worktreePath);
-    await runGit(["commit", "-m", `agentic worker ${workerId}`], meta.worktreePath);
-  }
+  // The auto-commit and merge/cleanup git calls below are wrapped as a unit:
+  // an unexpected git failure (as opposed to a real merge conflict, which
+  // `mergeBranch` reports as a normal `{merged:false}` result rather than
+  // throwing) must not leave the worker half-transitioned into 'merged'
+  // without an actual successful merge. On catch, `state` is left at
+  // 'verified' (retryable) with the failure recorded, and rethrown so the
+  // caller sees it.
+  try {
+    // Workers may or may not commit their own work; finalize commits
+    // whatever is left uncommitted so the merge captures it.
+    const dirty = await runGit(["status", "--porcelain"], worktreePath);
+    if (dirty.stdout.trim().length > 0) {
+      await runGit(["add", "-A"], worktreePath);
+      await runGit(["commit", "-m", `agentic worker ${workerId}`], worktreePath);
+    }
 
-  const target = targetBranch ?? meta.baseRef ?? "main";
-  const result = await mergeBranch({ repoDir: ctx.repoDir, sourceBranch: meta.branchName, targetBranch: target });
+    const target = targetBranch ?? meta.baseRef ?? "main";
+    const result = await mergeBranch({ repoDir: ctx.repoDir, sourceBranch: branchName, targetBranch: target });
 
-  if (!result.merged) {
+    if (!result.merged) {
+      meta = {
+        ...meta,
+        merge: { merged: false, conflictFiles: result.conflictFiles, at: Date.now() },
+        updatedAt: Date.now()
+      };
+      await persist(ctx, meta);
+      await logEvent(ctx, workerId, { type: "merge", merged: false, conflictFiles: result.conflictFiles });
+      // Caller decides what to do about a conflict; state stays 'verified'.
+      return meta;
+    }
+
+    await removeWorktree({ repoDir: ctx.repoDir, worktreePath, deleteBranch: branchName });
+
     meta = {
       ...meta,
-      merge: { merged: false, conflictFiles: result.conflictFiles, at: Date.now() },
+      state: "merged",
+      merge: { merged: true, mergeSha: result.mergeSha, at: Date.now() },
       updatedAt: Date.now()
     };
     await persist(ctx, meta);
-    await logEvent(ctx, workerId, { type: "merge", merged: false, conflictFiles: result.conflictFiles });
-    // Caller decides what to do about a conflict; state stays 'verified'.
+    await logEvent(ctx, workerId, { type: "merge", merged: true, mergeSha: result.mergeSha });
+    await logEvent(ctx, workerId, { type: "state", from: "verified", to: "merged" });
     return meta;
+  } catch (err) {
+    meta = {
+      ...meta,
+      lastError: { message: errMessage(err), classification: "infra" },
+      updatedAt: Date.now()
+    };
+    await persist(ctx, meta);
+    await logEvent(ctx, workerId, { type: "merge", merged: false, error: errMessage(err) });
+    throw err;
   }
-
-  await removeWorktree({ repoDir: ctx.repoDir, worktreePath: meta.worktreePath, deleteBranch: meta.branchName });
-
-  meta = {
-    ...meta,
-    state: "merged",
-    merge: { merged: true, mergeSha: result.mergeSha, at: Date.now() },
-    updatedAt: Date.now()
-  };
-  await persist(ctx, meta);
-  await logEvent(ctx, workerId, { type: "merge", merged: true, mergeSha: result.mergeSha });
-  await logEvent(ctx, workerId, { type: "state", from: "verified", to: "merged" });
-  return meta;
 }
 
 // ---------------------------------------------------------------------------

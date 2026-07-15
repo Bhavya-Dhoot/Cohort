@@ -94,6 +94,11 @@ export async function createBudgetTracker(
 
   const loaded = await readJsonIfExists<PersistedState>(filePath);
   const perWorker: Record<string, WorkerBudget> = loaded?.perWorker ?? {};
+  // Worker IDs this instance has itself reserved/reconciled. persist() uses
+  // this to decide which entries it owns (and may overwrite) versus which
+  // belong to another process sharing this file (and must be preserved
+  // as-is on write).
+  const touchedWorkerIds = new Set<string>();
 
   function totals(): { committedUsd: number; reservedUsd: number } {
     let committedUsd = 0;
@@ -112,8 +117,41 @@ export async function createBudgetTracker(
     return "ok";
   }
 
+  // Every persist() runs strictly after the previous one's rename has
+  // completed, chained through `ioChain`: concurrent reserve()/reconcile()
+  // calls previously each captured `perWorker` and raced their own
+  // read-tmp-write-rename sequences independently, and whichever rename
+  // landed last silently overwrote the other's entry (verified empirically
+  // -- a lost update, not just a lost reservation check). Chaining through
+  // one promise means each write's snapshot is only taken once the prior
+  // write is durable on disk.
+  let ioChain: Promise<void> = Promise.resolve();
+
   async function persist(): Promise<void> {
-    await atomicWriteJson(filePath, { perWorker });
+    const task = ioChain.then(async () => {
+      // Re-read the file fresh (rather than trusting this instance's
+      // long-lived in-memory snapshot) so a second BudgetTracker instance
+      // pointed at the same cost.json -- e.g. an orphaned MCP server from a
+      // crashed session -- doesn't get its entries clobbered by ours. Only
+      // entries for workers *this* instance has touched are overwritten;
+      // every other worker's entry is passed through verbatim (per-worker
+      // last-writer-wins, never a whole-file overwrite).
+      //
+      // ponytail: mitigation, not a fix -- there is still no cross-process
+      // file lock, so two instances racing to persist the SAME workerId at
+      // the same instant can still lose an update (this assumes a workerId
+      // is only ever mutated by the one process/tracker that owns it).
+      // True multi-writer accuracy needs a real file lock; out of scope
+      // for M1.
+      const diskState = await readJsonIfExists<PersistedState>(filePath);
+      const merged: Record<string, WorkerBudget> = { ...(diskState?.perWorker ?? {}) };
+      for (const workerId of touchedWorkerIds) {
+        merged[workerId] = perWorker[workerId]!;
+      }
+      await atomicWriteJson(filePath, { perWorker: merged });
+    });
+    ioChain = task.catch(() => undefined);
+    await task;
   }
 
   return {
@@ -136,6 +174,7 @@ export async function createBudgetTracker(
       }
 
       perWorker[workerId] = { ...perWorker[workerId], reservedUsd: estimate };
+      touchedWorkerIds.add(workerId);
       await persist();
 
       const after = totals();
@@ -150,6 +189,7 @@ export async function createBudgetTracker(
     async reconcile(workerId, actualUsd) {
       const priorCommitted = perWorker[workerId]?.committedUsd ?? 0;
       perWorker[workerId] = { committedUsd: round(priorCommitted + actualUsd) };
+      touchedWorkerIds.add(workerId);
       await persist();
     },
 

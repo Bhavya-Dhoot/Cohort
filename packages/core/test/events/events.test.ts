@@ -1,9 +1,19 @@
 import { randomBytes } from "node:crypto";
-import { appendFile, readFile, rm } from "node:fs/promises";
+import { appendFile, readFile, rename, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { openEventLog } from "../../src/events/index.js";
+
+// Wraps `rename` (keeping its real behavior) so the heal-atomicity test
+// below can assert the torn-tail heal goes through temp-file + rename
+// rather than an in-place `writeFile`. `node:fs/promises`' ESM namespace
+// isn't spy-able directly, so this mocks the whole module and passes every
+// other export through unchanged.
+vi.mock("node:fs/promises", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs/promises")>();
+  return { ...actual, rename: vi.fn(actual.rename) };
+});
 
 let dir: string;
 let filePath: string;
@@ -116,5 +126,47 @@ describe("concurrent appends", () => {
     const events = await log.read();
     expect(events).toHaveLength(20);
     expect(events.map((e) => e.seq)).toEqual(seqs);
+  });
+});
+
+describe("cross-process append safety", () => {
+  it("re-scans when the file grows outside this instance, avoiding a seq collision", async () => {
+    const log = openEventLog(filePath);
+    const first = await log.append({ type: "a" });
+    expect(first.seq).toBe(1);
+
+    // Simulate a second process appending directly to the file, bypassing
+    // this EventLog instance's in-memory seq counter.
+    await appendFile(
+      filePath,
+      `${JSON.stringify({ seq: 2, ts: Date.now(), type: "external" })}\n`,
+      "utf8"
+    );
+
+    const second = await log.append({ type: "b" });
+    expect(second.seq).toBe(3); // not 2 -- must not collide with the external writer's seq 2
+
+    const events = await log.read();
+    expect(events.map((e) => e.seq)).toEqual([1, 2, 3]);
+  });
+});
+
+describe("torn-tail heal atomicity", () => {
+  it("heals via temp-file + rename rather than an in-place write", async () => {
+    const log = openEventLog(filePath);
+    await log.append({ type: "a" });
+    // Simulate a crash mid-write: a partial, unterminated JSON line.
+    await appendFile(filePath, '{"seq":99,"ty', "utf8");
+
+    const renameMock = vi.mocked(rename);
+    renameMock.mockClear();
+
+    const reopened = openEventLog(filePath);
+    await reopened.append({ type: "b" });
+
+    expect(renameMock).toHaveBeenCalled();
+    const [tmpArg, destArg] = renameMock.mock.calls[0]!;
+    expect(String(tmpArg)).toContain(".tmp");
+    expect(destArg).toBe(filePath);
   });
 });
