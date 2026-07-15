@@ -10,6 +10,7 @@
     "test": "vitest run",
     "typecheck": "tsc --noEmit -p packages/core",
     "smoke": "node scripts/smoke.mjs",
-    "m2-accept": "node scripts/m2-accept.mjs"
+    "m2-accept": "node scripts/m2-accept.mjs",
+    "m3-accept": "node scripts/m3-accept.mjs"
   }
 }
