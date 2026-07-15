@@ -47,21 +47,39 @@
  */
 
 import { randomBytes } from "node:crypto";
-import { mkdir, stat, writeFile } from "node:fs/promises";
-import { basename, join, resolve } from "node:path";
+import { mkdir, readdir, stat, writeFile } from "node:fs/promises";
+import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { z } from "zod";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { loadConfig, resolveModelRoute, type OrchestratorConfig } from "../config/index.js";
-import { readJsonIfExists } from "../lib/fs.js";
+import { atomicWriteJson, readJsonIfExists } from "../lib/fs.js";
 import { openEventLog, type EventLog } from "../events/index.js";
 import { createBudgetTracker, type BudgetTracker } from "../budget/index.js";
 import { createWorkerSupervisor, type WorkerMeta, type WorkerState, type WorkerSupervisor } from "../worker/index.js";
 import { createOpencodeClient } from "../opencode-client/client.js";
 import type { OpencodeClient, SessionUsage } from "../opencode-client/types.js";
 import type { FetchFn } from "../opencode-client/http.js";
-import { runGit } from "../worktree/index.js";
+import {
+  assertIsWorktreeRoot,
+  ensureIntegrationBranch,
+  mergeInDagOrder,
+  removeWorktree,
+  runGit,
+  worktreePathFor
+} from "../worktree/index.js";
 import { resolveFreeModel, type ResolveFreeModelResult } from "../model-catalog/index.js";
+import {
+  TaskCardStore,
+  PlanTaskInputSchema,
+  selectBatch,
+  validateDag,
+  type PlanTaskInput,
+  type TaskCard
+} from "../tasks/index.js";
+import { openMemoryStore, type MemoryStore } from "../memory/index.js";
+import { resolveSuiteName, runCheckSuite, type CheckSuiteResult } from "../checks/index.js";
+import { PlanSchema, type Batch, type ReplanRecord } from "../plan/index.js";
 
 /**
  * Sentinel routing value (see `config/models.yaml`'s `routing.default`):
@@ -156,9 +174,20 @@ export async function createAgenticMcpServer(opts: CreateAgenticMcpServerOptions
 
   const runEventLog = openEventLog(join(runDir, "events.jsonl"));
 
+  // M2 DAG-aware task board: one per run (lives under runDir, like
+  // cost.json/events.jsonl), loaded once at startup so its in-memory map is
+  // ready before any tool call.
+  const taskStore = new TaskCardStore(join(runDir, "task-board.json"));
+  await taskStore.load();
+
+  // Cross-run shared project memory: deliberately NOT under runDir (a fresh
+  // run must still see prior runs' mission/decision-log/etc).
+  const memory = openMemoryStore(join(stateRoot, "memory"));
+
   const ctx: ServerCtx = {
     projectDir,
     runDir,
+    runId,
     config,
     supervisor,
     budget,
@@ -166,7 +195,10 @@ export async function createAgenticMcpServer(opts: CreateAgenticMcpServerOptions
     cachedBaseRef: undefined,
     client,
     fetchFn,
-    cachedFreeModel: undefined
+    cachedFreeModel: undefined,
+    taskStore,
+    memory,
+    worktreeBaseDir
   };
 
   const server = new McpServer({ name: "agentic-os", version: "0.1.0" });
@@ -241,6 +273,8 @@ async function resolveRunId(stateRoot: string, now: () => number): Promise<strin
 interface ServerCtx {
   projectDir: string;
   runDir: string;
+  /** This server instance's run id (see `resolveRunId`) — needed for `integrationBranchName`/`worktreePathFor`. */
+  runId: string;
   config: OrchestratorConfig;
   supervisor: WorkerSupervisor;
   budget: BudgetTracker;
@@ -257,6 +291,12 @@ interface ServerCtx {
    * contract ("re-resolve per MCP server start").
    */
   cachedFreeModel: Promise<ResolveFreeModelResult> | undefined;
+  /** M2 DAG-aware task board, bound to `<runDir>/task-board.json`; loaded once at server startup (see `createAgenticMcpServer`). */
+  taskStore: TaskCardStore;
+  /** Cross-run shared project memory, bound to `<projectDir>/.agentic-os/memory` — NOT under `runDir`. */
+  memory: MemoryStore;
+  /** Base directory worktrees (worker worktrees, and `integrate_batch`'s throwaway regression worktree) are provisioned under. */
+  worktreeBaseDir: string;
 }
 
 /** A tool handler's outcome before it's wrapped into an MCP `CallToolResult`. */
@@ -294,6 +334,40 @@ function workerMetaPath(ctx: ServerCtx, workerId: string): string {
 function workerEventsPath(ctx: ServerCtx, workerId: string): string {
   assertValidWorkerId(workerId);
   return join(ctx.runDir, "workers", workerId, "events.jsonl");
+}
+
+/**
+ * Path-safety pattern for M2 pipeline artifact ids (batchId, suiteName, the
+ * scope label in a checks/ filename, ...) that get embedded directly into
+ * on-disk filenames under `runDir`. Mirrors `WORKER_ID_PATTERN` above, with
+ * `.` additionally allowed since suite names mirror config keys. Enforced
+ * both at the zod schema layer (so a bad value never reaches a handler) and
+ * again here at path construction, same rationale as `assertValidWorkerId`.
+ */
+const ARTIFACT_ID_PATTERN = /^[A-Za-z0-9_.-]{1,64}$/;
+
+function assertArtifactId(label: string, value: string): void {
+  if (!ARTIFACT_ID_PATTERN.test(value)) {
+    throw new Error(`Invalid ${label} '${value}': must match ${ARTIFACT_ID_PATTERN.source}`);
+  }
+}
+
+function batchPath(ctx: ServerCtx, batchId: string): string {
+  assertArtifactId("batchId", batchId);
+  return join(ctx.runDir, "batches", `${batchId}.json`);
+}
+
+function contractPath(ctx: ServerCtx, contractId: string): string {
+  assertArtifactId("contractId", contractId);
+  return join(ctx.runDir, "contracts", `${contractId}.json`);
+}
+
+function replansDir(ctx: ServerCtx): string {
+  return join(ctx.runDir, "replans");
+}
+
+function checksDir(ctx: ServerCtx): string {
+  return join(ctx.runDir, "checks");
 }
 
 async function readWorkerMeta(ctx: ServerCtx, workerId: string): Promise<WorkerMeta | undefined> {
@@ -354,6 +428,126 @@ async function resolveAutoFreeModel(ctx: ServerCtx): Promise<ResolveFreeModelRes
   })();
   return ctx.cachedFreeModel;
 }
+
+/**
+ * Finds the worker most recently spawned for `taskId`, by scanning the
+ * run's worker registry for a `meta.taskId` match — the join key
+ * `spawn_worker` already persists on every `WorkerMeta` — rather than
+ * introducing a second place (e.g. a `TaskCard.workerId` field kept in
+ * sync by hand) to duplicate that association. Multiple workers can share a
+ * `taskId` across retries; the most recently created one wins.
+ */
+async function findWorkerForTask(ctx: ServerCtx, taskId: string): Promise<WorkerMeta | undefined> {
+  const metas = await ctx.supervisor.list();
+  const matches = metas.filter((m) => m.taskId === taskId);
+  if (matches.length === 0) {
+    return undefined;
+  }
+  return matches.reduce((latest, m) => (m.createdAt > latest.createdAt ? m : latest));
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/**
+ * Next 1-based index for `<prefix>-<n>.json` files already present in
+ * `dir` (1 if `dir` doesn't exist yet), so repeated `run_check_suite`/
+ * `integrate_batch` calls against the same scope+suite don't clobber each
+ * other's persisted `CheckSuiteResult`.
+ */
+async function nextArtifactIndex(dir: string, prefix: string): Promise<number> {
+  let entries: string[];
+  try {
+    entries = await readdir(dir);
+  } catch {
+    return 1;
+  }
+  const re = new RegExp(`^${escapeRegExp(prefix)}-(\\d+)\\.json$`);
+  let max = 0;
+  for (const entry of entries) {
+    const m = re.exec(entry);
+    if (m) {
+      max = Math.max(max, Number(m[1]));
+    }
+  }
+  return max + 1;
+}
+
+/**
+ * Best-effort topological order of `cards` by `dependsOn`, restricted to ids
+ * present in `cards` itself — a dependency on a task outside the batch is
+ * assumed already `done` (`selectBatch` wouldn't have offered this task
+ * otherwise) and isn't an ordering constraint here. Cycles can't happen for
+ * a batch `selectBatch` actually produced (`plan_submit`'s `validateDag`
+ * already rejected any cyclic plan before it was ever persisted), so the
+ * leftover-append fallback below is defensive only.
+ */
+function topoSortBatch(cards: TaskCard[]): string[] {
+  const ids = new Set(cards.map((c) => c.id));
+  const inDegree = new Map<string, number>();
+  const dependents = new Map<string, string[]>();
+  for (const card of cards) {
+    inDegree.set(card.id, 0);
+    dependents.set(card.id, []);
+  }
+  for (const card of cards) {
+    for (const dep of card.dependsOn) {
+      if (!ids.has(dep)) continue;
+      dependents.get(dep)!.push(card.id);
+      inDegree.set(card.id, (inDegree.get(card.id) ?? 0) + 1);
+    }
+  }
+
+  const order: string[] = [];
+  const ready = cards
+    .filter((c) => inDegree.get(c.id) === 0)
+    .map((c) => c.id)
+    .sort();
+  while (ready.length > 0) {
+    const id = ready.shift()!;
+    order.push(id);
+    for (const next of dependents.get(id) ?? []) {
+      const remaining = (inDegree.get(next) ?? 0) - 1;
+      inDegree.set(next, remaining);
+      if (remaining === 0) {
+        ready.push(next);
+        ready.sort();
+      }
+    }
+  }
+
+  for (const card of [...cards].sort((a, b) => a.id.localeCompare(b.id))) {
+    if (!order.includes(card.id)) {
+      order.push(card.id);
+    }
+  }
+  return order;
+}
+
+/**
+ * Adds a worktree checked out onto an EXISTING branch (`git worktree add`
+ * without `-b`) — `createWorktree` (worktree/create.ts) always creates a
+ * NEW branch via `-b`, which fails outright against a branch that already
+ * exists (the integration branch, by the time `integrate_batch` calls this).
+ * Mirrors `createWorktree`'s longpaths/mkdir setup so the same Windows
+ * MAX_PATH mitigation applies here too.
+ */
+async function addExistingBranchWorktree(repoDir: string, worktreePath: string, branchName: string): Promise<void> {
+  await runGit(["config", "core.longpaths", "true"], repoDir);
+  await mkdir(dirname(worktreePath), { recursive: true });
+  await runGit(["worktree", "add", "--", worktreePath, branchName], repoDir);
+}
+
+/** In-flight (non-terminal) worker lifecycle states — see `WORKER_STATES` above. */
+const IN_FLIGHT_WORKER_STATES: ReadonlySet<WorkerState> = new Set([
+  "created",
+  "worktree_provisioning",
+  "worktree_ready",
+  "session_starting",
+  "running",
+  "verifying"
+]);
 
 function textResult(payload: unknown, isError?: boolean): CallToolResult {
   return { isError, content: [{ type: "text", text: JSON.stringify(payload) }] };
@@ -557,6 +751,183 @@ function registerTools(server: McpServer, ctx: ServerCtx): void {
       }
     },
     async (input) => runTool(ctx, "finalize_worker", input.workerId, () => finalizeWorkerHandler(ctx, input))
+  );
+
+  // -------------------------------------------------------------------------
+  // M2 multi-worker pipeline tools
+  // -------------------------------------------------------------------------
+
+  server.registerTool(
+    "plan_submit",
+    {
+      title: "Plan Submit",
+      description:
+        "Validate and persist a DAG-aware task plan for this run: an objective, a set of task cards " +
+        "(id/dependsOn/fileOwnership/...), and optional contracts between them. Runs cycle and dangling-dependency " +
+        "detection before persisting anything — a plan that fails validation returns isError with the offending " +
+        "cycles/danglingDeps and writes nothing. On success, persists plan.json, one contracts/<id>.json per " +
+        "contract, seeds the task board with every task as 'pending', and snapshots the task graph into shared " +
+        "memory. Call this once per run before next_batch.",
+      inputSchema: PlanSchema.shape
+    },
+    async (input) => runTool(ctx, "plan_submit", undefined, () => planSubmitHandler(ctx, input))
+  );
+
+  server.registerTool(
+    "next_batch",
+    {
+      title: "Next Batch",
+      description:
+        "Select the next batch of DAG-ready, file-ownership-disjoint pending tasks (up to maxWorkers, default " +
+        "config.orchestrator.worker.maxConcurrent) and mark them 'assigned'. Refuses to select anything (empty " +
+        "tasks, reason 'budget hard cap') when the run's budget tier is already 'hard' — check the returned budget " +
+        "field before retrying. On a non-empty selection, persists a batches/<batchId>.json record. Spawn one " +
+        "worker per returned task yourself (spawn_worker's taskId: card.id) — this tool does not spawn workers.",
+      inputSchema: {
+        maxWorkers: z
+          .number()
+          .int()
+          .positive()
+          .optional()
+          .describe("Cap on tasks selected this call; defaults to config.orchestrator.worker.maxConcurrent.")
+      }
+    },
+    async (input) => runTool(ctx, "next_batch", undefined, () => nextBatchHandler(ctx, input))
+  );
+
+  server.registerTool(
+    "batch_status",
+    {
+      title: "Batch Status",
+      description:
+        "Read-only snapshot of a batch's tasks: each task's card status plus (if a worker has been spawned for it) " +
+        "that worker's id and lifecycle state. No side effects — safe to poll repeatedly while workers run.",
+      inputSchema: {
+        batchId: z
+          .string()
+          .min(1)
+          .regex(ARTIFACT_ID_PATTERN, `batchId must match ${ARTIFACT_ID_PATTERN.source}`)
+          .describe("Batch to inspect, from next_batch's response.")
+      }
+    },
+    async (input) => runTool(ctx, "batch_status", undefined, () => batchStatusHandler(ctx, input))
+  );
+
+  server.registerTool(
+    "integrate_batch",
+    {
+      title: "Integrate Batch",
+      description:
+        "Merges every batch task whose worker has reached 'verified' into this run's shared integration branch " +
+        "(agentic/integration/<runId>, created from the run's base branch on first use), in DAG order. Tasks whose " +
+        "worker isn't verified yet are skipped and returned separately as notVerified, rather than failing the " +
+        "call. NOTE on projectDir's checkout: merging runs directly against projectDir (the same mechanism " +
+        "finalize_worker uses), which switches projectDir's checked-out branch as a side effect — this tool " +
+        "switches it back to the run's base branch once merging finishes, before doing anything else, so the only " +
+        "observable disturbance is transient. If regressionSuite is given (or config.orchestrator.checks.usage." +
+        "regression is configured), runs it in a throwaway worktree of the integration branch — never against " +
+        "projectDir directly — and removes that worktree afterward regardless of outcome. Successfully merged " +
+        "tasks' cards move to 'done'; a conflicting merge's task moves to 'failed' and integration stops there " +
+        "(remaining tasks are reported, not attempted). Persists checks/integration-<suite>-<n>.json when a " +
+        "regression suite ran, and updates the batch's status to 'integrated' or 'failed'.",
+      inputSchema: {
+        batchId: z
+          .string()
+          .min(1)
+          .regex(ARTIFACT_ID_PATTERN, `batchId must match ${ARTIFACT_ID_PATTERN.source}`)
+          .describe("Batch to integrate."),
+        regressionSuite: z
+          .string()
+          .regex(ARTIFACT_ID_PATTERN, `regressionSuite must match ${ARTIFACT_ID_PATTERN.source}`)
+          .optional()
+          .describe(
+            "Check suite name to run against the integration branch; defaults to " +
+              "config.orchestrator.checks.usage.regression if configured, else no regression check runs."
+          )
+      }
+    },
+    async (input) => runTool(ctx, "integrate_batch", undefined, () => integrateBatchHandler(ctx, input))
+  );
+
+  server.registerTool(
+    "run_check_suite",
+    {
+      title: "Run Check Suite",
+      description:
+        "Runs a named multi-command check suite (config.orchestrator.checks.suites) against one worker's worktree " +
+        "(workerId), an explicit path inside projectDir (path), or projectDir itself (omit both — mutually " +
+        "exclusive with each other). Persists checks/<scope>-<suiteName>-<n>.json and returns the full " +
+        "CheckSuiteResult (pass/fail per command with output excerpts) — this is the only source of truth for " +
+        "whether checks passed, independent of any worker's self-report.",
+      inputSchema: {
+        workerId: z
+          .string()
+          .regex(WORKER_ID_PATTERN, "workerId must match ^[A-Za-z0-9_-]{1,64}$")
+          .optional()
+          .describe("Run inside this worker's worktree. Mutually exclusive with path."),
+        path: z
+          .string()
+          .optional()
+          .describe("Run inside this path, resolved relative to projectDir; must stay inside projectDir. Mutually exclusive with workerId."),
+        suiteName: z
+          .string()
+          .min(1)
+          .regex(ARTIFACT_ID_PATTERN, `suiteName must match ${ARTIFACT_ID_PATTERN.source}`)
+          .describe("Key into config.orchestrator.checks.suites.")
+      }
+    },
+    async (input) => runTool(ctx, "run_check_suite", input.workerId, () => runCheckSuiteHandler(ctx, input))
+  );
+
+  server.registerTool(
+    "memory",
+    {
+      title: "Memory",
+      description:
+        "Read, write, append to, or bundle sections of this project's shared cross-run memory " +
+        "(<projectDir>/.agentic-os/memory). 'read' returns one section's raw content (null if never written). " +
+        "'write' overwrites a snapshot section (mission/architecture/standards/progress/future-work/contracts/" +
+        "task-graph) — rejected for append-only sections. 'append' adds a stamped JSON entry to an append-only " +
+        "section (decision-log/known-bugs) — rejected for snapshot sections. 'bundle' concatenates multiple " +
+        "sections as labeled markdown, truncating by fixed priority to stay within maxTokens (defaults to " +
+        "config.memory.maxContextTokensPerHandoff) — check the returned truncated/omitted fields before assuming " +
+        "full context made it through.",
+      inputSchema: {
+        action: z.enum(["read", "write", "append", "bundle"]).describe("Which memory operation to perform."),
+        section: z.string().optional().describe("Section name; required for read/write/append."),
+        content: z.string().optional().describe("New section content; required for write."),
+        entry: z.record(z.string(), z.unknown()).optional().describe("Entry object to append; required for append."),
+        sections: z.array(z.string()).optional().describe("Section names to include; required for bundle."),
+        maxTokens: z
+          .number()
+          .int()
+          .positive()
+          .optional()
+          .describe("Token cap for bundle; defaults to config.memory.maxContextTokensPerHandoff.")
+      }
+    },
+    async (input) => runTool(ctx, "memory", undefined, () => memoryHandler(ctx, input))
+  );
+
+  server.registerTool(
+    "replan_record",
+    {
+      title: "Replan Record",
+      description:
+        "Records a replan iteration (reason, affected task ids, optionally new task cards seeded as 'pending') " +
+        "against this run's replans/<iteration>.json log, and appends a decision-log memory entry. Enforces " +
+        "config.orchestrator.replan.maxIterations: a call that would exceed the cap returns escalate:true with " +
+        "capRemaining:0 and records nothing — treat that as a hard stop requiring a human, not something to retry.",
+      inputSchema: {
+        reason: z.string().min(1).describe("Why this replan is happening."),
+        affectedTaskIds: z.array(z.string()).min(1).describe("Task ids this replan affects."),
+        newTasks: z
+          .array(PlanTaskInputSchema)
+          .optional()
+          .describe("New task cards to seed as 'pending', if this replan adds work.")
+      }
+    },
+    async (input) => runTool(ctx, "replan_record", undefined, () => replanRecordHandler(ctx, input))
   );
 }
 
@@ -791,6 +1162,415 @@ async function finalizeWorkerHandler(ctx: ServerCtx, input: FinalizeWorkerInput)
       merged: meta.merge?.merged,
       mergeSha: meta.merge?.mergeSha,
       conflictFiles: meta.merge?.conflictFiles
+    }
+  };
+}
+
+// ---------------------------------------------------------------------------
+// M2 multi-worker pipeline tool handlers
+// ---------------------------------------------------------------------------
+
+interface PlanSubmitInput {
+  objective: string;
+  tasks: PlanTaskInput[];
+  contracts?: { id: string; name: string; description: string; interface?: string; producerTaskId?: string; consumerTaskIds?: string[] }[] | undefined;
+  domains?: string[] | undefined;
+  orgChart?: unknown;
+}
+
+async function planSubmitHandler(ctx: ServerCtx, input: PlanSubmitInput): Promise<ToolOutcome> {
+  const now = Date.now();
+  const cards: TaskCard[] = input.tasks.map(
+    (task): TaskCard => ({
+      ...task,
+      status: "pending",
+      createdAt: now,
+      updatedAt: now
+    })
+  );
+
+  const dag = validateDag(cards);
+  if (!dag.valid) {
+    return {
+      isError: true,
+      payload: { valid: false, taskCount: cards.length, cycles: dag.cycles, danglingDeps: dag.danglingDeps }
+    };
+  }
+
+  const planId = randomBytes(4).toString("hex");
+  await atomicWriteJson(join(ctx.runDir, "plan.json"), {
+    planId,
+    objective: input.objective,
+    tasks: input.tasks,
+    contracts: input.contracts ?? [],
+    domains: input.domains,
+    orgChart: input.orgChart,
+    createdAt: now
+  });
+
+  for (const contract of input.contracts ?? []) {
+    await atomicWriteJson(contractPath(ctx, contract.id), contract);
+  }
+
+  await ctx.taskStore.putMany(cards);
+
+  await ctx.memory.writeSection(
+    "task-graph",
+    JSON.stringify({
+      planId,
+      tasks: cards.map((c) => ({ id: c.id, dependsOn: c.dependsOn, fileOwnership: c.fileOwnership, status: c.status }))
+    })
+  );
+
+  return { payload: { planId, taskCount: cards.length, valid: true, cycles: [], danglingDeps: [] } };
+}
+
+interface NextBatchInput {
+  maxWorkers?: number | undefined;
+}
+
+async function nextBatchHandler(ctx: ServerCtx, input: NextBatchInput): Promise<ToolOutcome> {
+  const budget = budgetSnapshotPublic(ctx);
+  if (budget.tier === "hard") {
+    return {
+      payload: { batchId: null, tasks: [], blocked: [], reason: "budget hard cap", budget }
+    };
+  }
+
+  const maxConcurrent = input.maxWorkers ?? ctx.config.orchestrator.worker.maxConcurrent;
+  const cards = ctx.taskStore.list();
+  const selection = selectBatch(cards, { maxConcurrent });
+
+  if (selection.ready.length === 0) {
+    return { payload: { batchId: null, tasks: [], blocked: selection.blocked } };
+  }
+
+  const batchId = randomBytes(4).toString("hex");
+  const readyIds = selection.ready.map((c) => c.id);
+  await ctx.taskStore.markAssigned(readyIds, batchId);
+  // Re-read post-assignment so the returned cards reflect their real
+  // persisted status ('assigned'), not the pre-assignment snapshot selectBatch saw.
+  const assignedCards = readyIds
+    .map((id) => ctx.taskStore.get(id))
+    .filter((c): c is TaskCard => c !== undefined);
+
+  const batch: Batch = { batchId, taskIds: readyIds, createdAt: Date.now(), status: "selected" };
+  await atomicWriteJson(batchPath(ctx, batchId), batch);
+
+  return { payload: { batchId, tasks: assignedCards, blocked: selection.blocked } };
+}
+
+interface BatchStatusInput {
+  batchId: string;
+}
+
+async function batchStatusHandler(ctx: ServerCtx, input: BatchStatusInput): Promise<ToolOutcome> {
+  const batch = await readJsonIfExists<Batch>(batchPath(ctx, input.batchId));
+  if (!batch) {
+    throw new Error(`Unknown batch '${input.batchId}'`);
+  }
+
+  const tasks: Record<string, unknown>[] = [];
+  let allTerminal = true;
+  for (const taskId of batch.taskIds) {
+    const card = ctx.taskStore.get(taskId);
+    const worker = await findWorkerForTask(ctx, taskId);
+    if (worker && IN_FLIGHT_WORKER_STATES.has(worker.state)) {
+      allTerminal = false;
+    }
+    tasks.push({
+      taskId,
+      workerId: worker?.workerId,
+      taskState: card?.status ?? "unknown",
+      workerState: worker?.state
+    });
+  }
+
+  return {
+    payload: {
+      batchId: batch.batchId,
+      status: batch.status,
+      tasks,
+      allTerminal,
+      integrationBranch: batch.integrationBranch
+    }
+  };
+}
+
+interface IntegrateBatchInput {
+  batchId: string;
+  regressionSuite?: string | undefined;
+}
+
+async function integrateBatchHandler(ctx: ServerCtx, input: IntegrateBatchInput): Promise<ToolOutcome> {
+  const batch = await readJsonIfExists<Batch>(batchPath(ctx, input.batchId));
+  if (!batch) {
+    throw new Error(`Unknown batch '${input.batchId}'`);
+  }
+
+  const cards = batch.taskIds.map((id) => ctx.taskStore.get(id)).filter((c): c is TaskCard => c !== undefined);
+  const order = topoSortBatch(cards);
+
+  const workersByTask = new Map<string, WorkerMeta>();
+  for (const taskId of batch.taskIds) {
+    const worker = await findWorkerForTask(ctx, taskId);
+    if (worker) {
+      workersByTask.set(taskId, worker);
+    }
+  }
+
+  const merges: { taskId: string; sourceBranch: string }[] = [];
+  const notVerified: string[] = [];
+  for (const taskId of order) {
+    const worker = workersByTask.get(taskId);
+    if (worker && worker.state === "verified" && worker.branchName) {
+      merges.push({ taskId, sourceBranch: worker.branchName });
+    } else {
+      notVerified.push(taskId);
+    }
+  }
+
+  await atomicWriteJson(batchPath(ctx, batch.batchId), { ...batch, status: "integrating" });
+
+  const baseRef = await resolveDefaultBaseRef(ctx);
+  const { branchName: integrationBranch } = await ensureIntegrationBranch({
+    repoDir: ctx.projectDir,
+    runId: ctx.runId,
+    baseRef
+  });
+
+  const mergeResult = await mergeInDagOrder({
+    repoDir: ctx.projectDir,
+    integrationBranch,
+    merges
+  });
+
+  // mergeBranch (see worktree/merge.ts) `git switch`es projectDir onto
+  // integrationBranch as part of attempting the FIRST merge, and leaves it
+  // there — whether that merge (or a later one) ends up conflicting or not.
+  // Switch back to the run's base branch now, before anything else touches
+  // projectDir: this both restores the caller's checkout and frees
+  // integrationBranch to be checked out in the throwaway regression
+  // worktree below (git refuses to have the same branch checked out in two
+  // worktrees at once).
+  if (merges.length > 0) {
+    await runGit(["switch", "--", baseRef], ctx.projectDir);
+  }
+
+  for (const outcome of mergeResult.results) {
+    const card = ctx.taskStore.get(outcome.taskId);
+    if (!card) continue;
+    if (outcome.outcome === "merged") {
+      await ctx.taskStore.put({ ...card, status: "done" });
+    } else if (outcome.outcome === "conflict") {
+      await ctx.taskStore.put({
+        ...card,
+        status: "failed",
+        meta: { ...card.meta, mergeConflictFiles: outcome.conflictFiles }
+      });
+    }
+    // 'skipped' merge outcomes (tasks after a conflict) are left untouched —
+    // never attempted, so still retryable in a later integrate_batch call.
+  }
+
+  let regressionCheck: CheckSuiteResult | null = null;
+  let regressionNote: string | undefined;
+  let suiteName = input.regressionSuite;
+  if (!suiteName) {
+    try {
+      suiteName = resolveSuiteName(ctx.config.orchestrator.checks?.usage, "regression");
+    } catch {
+      suiteName = undefined;
+    }
+  }
+
+  if (suiteName) {
+    const tempWorktreePath = worktreePathFor(ctx.worktreeBaseDir, ctx.runId, `integ-${batch.batchId}`);
+    try {
+      await addExistingBranchWorktree(ctx.projectDir, tempWorktreePath, integrationBranch);
+      regressionCheck = await runCheckSuite({
+        cwd: tempWorktreePath,
+        suiteName,
+        suites: ctx.config.orchestrator.checks?.suites ?? {}
+      });
+      const idx = await nextArtifactIndex(checksDir(ctx), `integration-${suiteName}`);
+      await atomicWriteJson(join(checksDir(ctx), `integration-${suiteName}-${idx}.json`), regressionCheck);
+    } finally {
+      await removeWorktree({ repoDir: ctx.projectDir, worktreePath: tempWorktreePath, force: true });
+    }
+  } else {
+    regressionNote =
+      "No regressionSuite given and none configured at config.orchestrator.checks.usage.regression — merges only, no checks ran.";
+  }
+
+  const allMerged = mergeResult.allMerged;
+  const allPassed = allMerged && (regressionCheck ? regressionCheck.passed : true);
+  const finalStatus: Batch["status"] = allPassed ? "integrated" : "failed";
+  await atomicWriteJson(batchPath(ctx, batch.batchId), { ...batch, status: finalStatus, integrationBranch });
+
+  return {
+    payload: {
+      integrationBranch,
+      merges: mergeResult.results,
+      notVerified,
+      regressionCheck,
+      ...(regressionNote ? { note: regressionNote } : {}),
+      allMerged,
+      allPassed
+    }
+  };
+}
+
+interface RunCheckSuiteInput {
+  workerId?: string | undefined;
+  path?: string | undefined;
+  suiteName: string;
+}
+
+async function runCheckSuiteHandler(ctx: ServerCtx, input: RunCheckSuiteInput): Promise<ToolOutcome> {
+  if (input.workerId && input.path) {
+    return { isError: true, payload: { error: "Provide at most one of workerId or path, not both." } };
+  }
+
+  let cwd: string;
+  let scope: string;
+  if (input.workerId) {
+    const meta = await readWorkerMeta(ctx, input.workerId);
+    if (!meta?.worktreePath) {
+      throw new Error(`Worker '${input.workerId}' has no worktree to run checks in`);
+    }
+    await assertIsWorktreeRoot(meta.worktreePath);
+    cwd = meta.worktreePath;
+    scope = input.workerId;
+  } else if (input.path) {
+    const resolvedPath = resolve(ctx.projectDir, input.path);
+    const rel = relative(ctx.projectDir, resolvedPath);
+    if (rel.startsWith("..") || isAbsolute(rel)) {
+      throw new Error(`path '${input.path}' escapes projectDir`);
+    }
+    cwd = resolvedPath;
+    scope = "path";
+  } else {
+    cwd = ctx.projectDir;
+    scope = "project";
+  }
+
+  const result = await runCheckSuite({
+    cwd,
+    suiteName: input.suiteName,
+    suites: ctx.config.orchestrator.checks?.suites ?? {}
+  });
+
+  const idx = await nextArtifactIndex(checksDir(ctx), `${scope}-${input.suiteName}`);
+  await atomicWriteJson(join(checksDir(ctx), `${scope}-${input.suiteName}-${idx}.json`), result);
+
+  return { workerId: input.workerId, payload: { ...result } };
+}
+
+interface MemoryInput {
+  action: "read" | "write" | "append" | "bundle";
+  section?: string | undefined;
+  content?: string | undefined;
+  entry?: Record<string, unknown> | undefined;
+  sections?: string[] | undefined;
+  maxTokens?: number | undefined;
+}
+
+async function memoryHandler(ctx: ServerCtx, input: MemoryInput): Promise<ToolOutcome> {
+  switch (input.action) {
+    case "read": {
+      if (!input.section) {
+        throw new Error("'section' is required for action 'read'");
+      }
+      const content = await ctx.memory.readSection(input.section);
+      return { payload: { section: input.section, content: content ?? null, exists: content !== undefined } };
+    }
+    case "write": {
+      if (!input.section || input.content === undefined) {
+        throw new Error("'section' and 'content' are required for action 'write'");
+      }
+      await ctx.memory.writeSection(input.section, input.content);
+      return { payload: { section: input.section, ok: true } };
+    }
+    case "append": {
+      if (!input.section || !input.entry) {
+        throw new Error("'section' and 'entry' are required for action 'append'");
+      }
+      await ctx.memory.appendEntry(input.section, input.entry);
+      return { payload: { section: input.section, ok: true } };
+    }
+    case "bundle": {
+      if (!input.sections || input.sections.length === 0) {
+        throw new Error("'sections' (non-empty) is required for action 'bundle'");
+      }
+      const maxTokens = input.maxTokens ?? ctx.config.memory.maxContextTokensPerHandoff;
+      const bundle = await ctx.memory.buildContextBundle({ sections: input.sections, maxTokens });
+      return { payload: { ...bundle } };
+    }
+  }
+}
+
+interface ReplanRecordInput {
+  reason: string;
+  affectedTaskIds: string[];
+  newTasks?: PlanTaskInput[] | undefined;
+}
+
+async function replanRecordHandler(ctx: ServerCtx, input: ReplanRecordInput): Promise<ToolOutcome> {
+  const dir = replansDir(ctx);
+  let entries: string[] = [];
+  try {
+    entries = await readdir(dir);
+  } catch {
+    entries = [];
+  }
+  const iterations = entries
+    .map((f) => /^(\d+)\.json$/.exec(f))
+    .filter((m): m is RegExpExecArray => m !== null)
+    .map((m) => Number(m[1]));
+  const currentMax = iterations.length > 0 ? Math.max(...iterations) : 0;
+  const nextIteration = currentMax + 1;
+  const maxIterations = ctx.config.orchestrator.replan.maxIterations;
+
+  if (nextIteration > maxIterations) {
+    return { payload: { escalate: true, iteration: nextIteration, capRemaining: 0 } };
+  }
+
+  const now = Date.now();
+  const newCards: TaskCard[] = (input.newTasks ?? []).map(
+    (task): TaskCard => ({
+      ...task,
+      status: "pending",
+      createdAt: now,
+      updatedAt: now
+    })
+  );
+  if (newCards.length > 0) {
+    await ctx.taskStore.putMany(newCards);
+  }
+
+  const record: ReplanRecord = {
+    iteration: nextIteration,
+    reason: input.reason,
+    affectedTaskIds: input.affectedTaskIds,
+    newTaskIds: newCards.map((c) => c.id),
+    at: now
+  };
+  await atomicWriteJson(join(dir, `${nextIteration}.json`), record);
+  await ctx.memory.appendEntry("decision-log", {
+    type: "replan",
+    iteration: nextIteration,
+    reason: input.reason,
+    affectedTaskIds: input.affectedTaskIds,
+    newTaskIds: record.newTaskIds
+  });
+
+  return {
+    payload: {
+      iteration: nextIteration,
+      capRemaining: maxIterations - nextIteration,
+      escalate: false,
+      newTaskIds: record.newTaskIds
     }
   };
 }
