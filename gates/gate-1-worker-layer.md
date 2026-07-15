@@ -39,6 +39,8 @@ The complete M1 worker layer: Claude Code can spawn, monitor, verify, and merge 
 
 Plugin stdio entry validated end-to-end: raw JSON-RPC initialize + tools/list against `dist/mcp/bin.js` (the exact command in the plugin's `.mcp.json`) returns all 8 tools. A fully interactive `claude --plugin-dir` acceptance could not be run from this autonomous session (nested `claude -p` gets 401 — cannot reuse the interactive session's credentials) — it is the first founder checklist item below.
 
+**Incident found by the smoke's failed runs (and fixed):** when a worker's worktree path exists but is not a valid git worktree (partial provisioning / half-completed removal), git walks UP to the enclosing repository — `finalize`'s auto-commit briefly committed junk into the platform repo itself during smoke debugging. History was cleaned (local squash), and a structural guard was added: every git command aimed at a worktree first asserts `git rev-parse --show-toplevel` resolves to that exact directory (realpath, Windows case/separator-normalized), with a regression test asserting the outer repo gains no commit and no staged files. Smoke scratch workspaces also moved out of the platform repo (`%TEMP%\agentic-smoke`). This bug class — a worker committing into the *user's* repo — is exactly what M1 exists to make impossible; the smoke earned its cost.
+
 ## Open risks / M2 inputs
 
 1. Reviewer/verifier same-family bias (all Sonnet) — mitigated by refutation-default prompts this round; M3 introduces cross-model review as planned.

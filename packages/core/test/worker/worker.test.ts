@@ -538,3 +538,89 @@ describe("detached HEAD", () => {
     expect(spawned.worktreePath).toBeUndefined();
   });
 });
+
+describe("finalize guard: worktreePath is not a real worktree", () => {
+  it("refuses to auto-commit into an enclosing repo it merely fell into, keeps the worker 'verified', and leaves that repo untouched", async () => {
+    // A separate real git repo that the (dead/never-provisioned) worktree
+    // directory happens to be nested inside -- standing in for the
+    // production incident where a partially-provisioned worktree path
+    // ended up inside the platform repo itself, distinct from the
+    // supervisor's own configured `repoDir`.
+    const outerRepoDir = join(root, "outer-repo");
+    await mkdir(outerRepoDir, { recursive: true });
+    await runGit(["init", "-b", "main"], outerRepoDir);
+    await runGit(["config", "user.email", "outer@example.com"], outerRepoDir);
+    await runGit(["config", "user.name", "Outer Repo"], outerRepoDir);
+    await runGit(["config", "core.autocrlf", "false"], outerRepoDir);
+    await writeFile(join(outerRepoDir, "outer.txt"), "outer repo content\n", "utf8");
+    await runGit(["add", "outer.txt"], outerRepoDir);
+    await runGit(["commit", "-m", "outer initial commit"], outerRepoDir);
+
+    // A plain directory nested inside the outer repo -- NOT created via
+    // `git worktree add`, simulating a failed/partial provisioning or a
+    // half-completed removal that left a dead directory behind.
+    const deadWorktreePath = join(outerRepoDir, "dead-worktree");
+    await mkdir(deadWorktreePath, { recursive: true });
+    await writeFile(join(deadWorktreePath, "leftover.txt"), "leftover\n", "utf8");
+
+    const workerId = "dead-worktree-1";
+    const verifiedMeta: WorkerMeta = {
+      workerId,
+      runId: "run-dead-worktree",
+      taskId: "t",
+      state: "verified",
+      prompt: "p",
+      worktreePath: deadWorktreePath,
+      branchName: "agentic/dead/worktree",
+      baseRef: "main",
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+      attempts: { infra: 0 },
+      verify: { passed: true, exitCode: 0, timedOut: false, at: Date.now() }
+    };
+    await mkdir(join(stateDir, "workers", workerId), { recursive: true });
+    await writeFile(join(stateDir, "workers", workerId, "meta.json"), JSON.stringify(verifiedMeta), "utf8");
+
+    // ctx.repoDir is the normal fixture repo -- deliberately NOT the outer
+    // repo the dead worktree fell into, mirroring how in production the
+    // enclosing repo git walked up into was unrelated to the supervisor's
+    // own configured project repo.
+    const supervisor = createWorkerSupervisor({
+      client: createMockClient(),
+      stateDir,
+      repoDir,
+      worktreeBaseDir: worktreesDir,
+      runId: "run-dead-worktree"
+    });
+
+    const beforeStatus = (await runGit(["status", "--porcelain"], outerRepoDir)).stdout;
+    const beforeLog = (await runGit(["log", "--oneline"], outerRepoDir)).stdout
+      .trim()
+      .split(/\r?\n/)
+      .filter(Boolean);
+
+    await expect(supervisor.finalize(workerId, "merge")).rejects.toThrow(
+      /not itself a git worktree|enclosing repository/i
+    );
+
+    // Worker stays retryable at 'verified' (not half-transitioned), with
+    // the guard's failure recorded -- same F9 wrapper contract as the
+    // existing "finalize('merge') git failure" case above.
+    const status = await supervisor.status(workerId);
+    expect(status.state).toBe("verified");
+    expect(status.lastError).toBeDefined();
+    expect(status.lastError?.message).toMatch(/not itself a git worktree|enclosing repository/i);
+    expect(status.merge).toBeUndefined();
+
+    // The load-bearing assertion: the enclosing repo the dead worktree fell
+    // into must show NO new commit and NOTHING newly staged/committed.
+    const afterStatus = (await runGit(["status", "--porcelain"], outerRepoDir)).stdout;
+    const afterLog = (await runGit(["log", "--oneline"], outerRepoDir)).stdout
+      .trim()
+      .split(/\r?\n/)
+      .filter(Boolean);
+
+    expect(afterStatus).toBe(beforeStatus);
+    expect(afterLog).toHaveLength(beforeLog.length);
+  });
+});

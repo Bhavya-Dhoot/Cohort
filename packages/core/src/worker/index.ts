@@ -47,7 +47,14 @@ import { join } from "node:path";
 import { atomicWriteJson, readJsonIfExists } from "../lib/fs.js";
 import { openEventLog, type EventLog } from "../events/index.js";
 import { runVerification, type VerifyResult } from "../verify/index.js";
-import { createWorktree, mergeBranch, removeWorktree, runGit, worktreePathFor } from "../worktree/index.js";
+import {
+  assertIsWorktreeRoot,
+  createWorktree,
+  mergeBranch,
+  removeWorktree,
+  runGit,
+  worktreePathFor
+} from "../worktree/index.js";
 import type { NormalizedEvent, OpencodeClient, PromptResult } from "../opencode-client/types.js";
 import type {
   CollectResult,
@@ -675,6 +682,12 @@ async function collectWorker(ctx: Ctx, workerId: string): Promise<CollectResult>
   const baseRef = meta.baseRef ?? "HEAD";
   const worktreePath = meta.worktreePath;
 
+  // Cheap insurance: a worktree that was never fully provisioned or was
+  // partially removed can still exist as a plain directory. Without this,
+  // git would silently walk up to whatever enclosing repo it finds and
+  // produce garbage diffs/status for a completely unrelated repository.
+  await assertIsWorktreeRoot(worktreePath);
+
   const committedNames = await runGit(["diff", "--name-only", `${baseRef}..HEAD`], worktreePath)
     .then((r) => splitLines(r.stdout))
     .catch(() => [] as string[]);
@@ -801,6 +814,15 @@ async function finalizeWorker(
   // 'verified' (retryable) with the failure recorded, and rethrown so the
   // caller sees it.
   try {
+    // Structural safety check, before ANY git command (let alone a
+    // mutating one) runs with this worktree as cwd: a worktree that was
+    // never fully provisioned or was left behind by a partial removal can
+    // still exist as a plain directory. Without this, `git add -A && git
+    // commit` below would silently walk up to whatever enclosing repo git
+    // finds and commit into THAT repo instead — see assertIsWorktreeRoot's
+    // docstring for the production incident this guards against.
+    await assertIsWorktreeRoot(worktreePath);
+
     // Workers may or may not commit their own work; finalize commits
     // whatever is left uncommitted so the merge captures it.
     const dirty = await runGit(["status", "--porcelain"], worktreePath);

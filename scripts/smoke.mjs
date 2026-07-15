@@ -9,9 +9,17 @@
  * branch with the expected file content.
  *
  * Usage: npm run smoke
- * Env:   SMOKE_MODEL  optional "provider/model" override passed to
- *                      spawn_worker; omitted -> config/models.yaml's
- *                      routing.default is used instead.
+ * Env:   SMOKE_MODEL        optional "provider/model" override passed to
+ *                            spawn_worker; omitted -> config/models.yaml's
+ *                            routing.default is used instead.
+ *        SMOKE_SCRATCH_DIR  optional override for the root directory the
+ *                            scratch repo/worktrees are created under;
+ *                            defaults to a directory under the OS temp dir
+ *                            so a smoke run never creates a nested git repo
+ *                            (or leftover worktree dirs) inside the platform
+ *                            repo itself -- see worktree/guard.ts's
+ *                            assertIsWorktreeRoot docstring for the class of
+ *                            bug that kind of nesting caused in production.
  *
  * Notes on where state actually lives (verified against
  * packages/core/src/mcp/server.ts and worker/index.ts, not assumed):
@@ -26,6 +34,7 @@
 
 import { spawnSync } from "node:child_process";
 import { mkdir, readFile, writeFile, rm, stat } from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -34,6 +43,12 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(__dirname, "..");
 const PLATFORM_CONFIG_DIR = path.join(REPO_ROOT, "config");
+// Scratch workspaces live OUTSIDE the platform repo by default -- a git repo
+// (and worktrees) nested inside REPO_ROOT is exactly the shape of directory
+// layout that caused a dead worktree to be mistaken for an enclosing repo in
+// production (see worktree/guard.ts). SMOKE_SCRATCH_DIR overrides the root
+// if a specific location is needed.
+const SCRATCH_BASE_DIR = process.env.SMOKE_SCRATCH_DIR ?? path.join(os.tmpdir(), "agentic-smoke");
 
 const POLL_MS = 5000;
 const MAX_WAIT_MS = 10 * 60 * 1000;
@@ -165,7 +180,7 @@ async function main() {
   log("build ok");
 
   const ts = new Date().toISOString().replace(/[:.]/g, "-");
-  scratchRoot = path.join(REPO_ROOT, "scratch", `smoke-${ts}`);
+  scratchRoot = path.join(SCRATCH_BASE_DIR, `smoke-${ts}`);
   repoDir = path.join(scratchRoot, "repo");
   await mkdir(repoDir, { recursive: true });
 
