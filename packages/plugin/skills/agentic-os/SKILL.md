@@ -1,6 +1,6 @@
 ---
 name: agentic-os
-description: Autonomously drive a whole software objective to completion by orchestrating parallel OpenCode workers in isolated git worktrees via the agentic-os MCP tools. Use this whenever the user gives a build/implement/fix objective — from a one-task change to a multi-discipline project — instead of writing the code in-session. Covers the full loop: analyze, plan a task DAG, spawn concurrent workers, verify, review, integrate, and re-plan on failure. Also use it to poll, verify, and merge workers already spawned.
+description: Autonomously drive a whole software objective to completion by orchestrating parallel OpenCode workers in isolated git worktrees via the agentic-os MCP tools. Use this whenever the user gives a build/implement/fix objective — from a one-task change to a multi-discipline project — instead of writing the code in-session. Covers the full loop: analyze, generate a dynamic org (domains, generated specialist agents, org chart) and a task DAG, spawn concurrent workers, verify, dispatch dedicated reviewer subagents, integrate, and re-plan on failure. Also use it to poll, verify, and merge workers already spawned.
 ---
 
 # Agentic OS: autonomous engineering orchestration
@@ -25,10 +25,22 @@ carries: `id`, `title`, a self-contained `prompt` (section 1), `dependsOn`
 (ids that must finish first), and `fileOwnership` (path globs it may touch —
 this is what makes parallelism safe). Define `contracts` (shared interface
 stubs: API shapes, schemas, types) that dependent tasks build against, so
-workers never wait on each other's chat. For a bigger objective, also assign
-each task a `domain` (auth, payments, infra…) and `taskType` (routes the
-model). Call `plan_submit(objective, tasks, contracts?, domains?)`. It
-validates the DAG and rejects cycles/dangling deps — fix and resubmit if so.
+workers never wait on each other's chat. Assign each task a `domain` (auth,
+payments, infra…) and `taskType` (routes the model).
+
+For a multi-discipline objective, also generate the **organization as data**,
+not just a flat task list: identify the `domains` this specific objective
+splits into, which of them need a distinct specialist, and an `orgChart` — a
+tree from CEO → Engineering Manager → Domain Leads → Specialists → Reviewers
+→ Integration — recording who owns what. Derive this from the actual work
+every time; there is no fixed roster, so a two-domain objective yields a
+two-domain org and a six-domain one yields six, each shaped differently. The
+hierarchy is a planning artifact, not separate running processes: you
+(Claude) play CEO, EM, and every Domain Lead in-session, `specialist` nodes
+become real generated OpenCode agents (next step), and `reviewer` nodes map
+to the fixed reviewer subagents (4a). Call `plan_submit(objective, tasks,
+contracts?, domains?, orgChart?)`. It validates the DAG and rejects
+cycles/dangling deps — fix and resubmit if so.
 
 **Human gate — plan approval.** If `orchestrator.yaml` has
 `humanGates.planApproval: true`, present the plan (objective, task list with
@@ -36,12 +48,29 @@ deps, org/domains, rough parallelism) to the human in chat and **wait for an
 explicit reply** before dispatching any worker. This is a real pause, not a
 tool call.
 
+**Specialists — create only what the org needs.** Before dispatching, for
+each domain whose plan work needs a distinct expert (not just the default
+build agent), call `specialist(action:'generate', agentId, role, description,
+systemPrompt, ...)`. It writes `.opencode/agent/<agentId>.md` in the target
+project — e.g. an "OAuth Engineer" for the `auth` domain, with a system
+prompt scoped to that domain's contracts and standards. Pass the returned
+`agentId` to `spawn_worker`'s `agentId` param (section 1) so that domain's
+workers run as the specialist instead of the default agent. Generate only
+what the plan needs — there's a `max_concurrent_specialists` cap — and call
+`specialist(action:'retire', agentId)` once a domain's tasks are all
+integrated and no more are coming: create when required, destroy when not.
+`specialist(action:'list')` shows what's currently generated. The
+safety-floor deny rules from `agents.yaml` are always merged into every
+generated agent's permissions regardless of what its spec asks for.
+
 **Batch → Spawn.** Call `next_batch(maxWorkers?)`. It returns `tasks` that
 are DAG-ready and have non-overlapping file ownership (conflicts are made
 structurally impossible, not caught later), plus `blocked` with reasons. If
 `ready` is empty because the budget hit the hard tier, stop and tell the
-human. For each ready card, `spawn_worker` (section 1). Then run the
-per-worker loop (sections 2–4) for the batch: poll, collect, verify.
+human. For each ready card, `spawn_worker` (section 1) — pass the domain's
+specialist `agentId` when one was generated for it, the default agent
+otherwise. Then run the per-worker loop (sections 2–4) for the batch: poll,
+collect, verify.
 
 **Review.** Before integrating, request review of each verified worker's
 diff from the relevant reviewer subagents (section 4a) — they are read-only
@@ -148,16 +177,33 @@ result; use per-worker `finalize_worker` mainly for one-off tasks and for
 
 ## 4a. Review (dedicated reviewers, never writers)
 
-For batch work, before integrating a verified worker, dispatch the reviewer
-subagents relevant to the task to inspect its diff — security, performance,
-architecture, testing, style, documentation, accessibility (pick the ones
-that fit the task; a config change doesn't need the accessibility reviewer).
-Reviewers are separate subagents with **read-only tools** — they structurally
-cannot edit code; their only output is a structured verdict recorded via
-`review_verdict`. Read the verdicts back before integrating: a `block` (or an
-unaddressed `revise`) means re-plan that task, not merge it. Reviewers never
-write production code, and you never let a worker's own "looks good" stand in
-for a review.
+For batch work, once a worker is `verified` and before it's integrated,
+dispatch the reviewer subagents relevant to *that task* — by agent name:
+`security`, `performance`, `architecture`, `testing`, `style`,
+`documentation`, `accessibility` (`packages/plugin/agents/*.md`). Select per
+task, never all seven on everything: a backend auth change wants security +
+architecture + testing; the same change with a UI component adds
+accessibility + style; a docs-only task might need only documentation. A
+task card's `reviewers` field from planning is a starting hint, not a
+ceiling — adjust to what the diff actually touches. Dispatch each selected
+reviewer via the Task tool, handing it the worker's worktree path (or the
+changed-files list from `collect_worker`) and the task's contract/acceptance
+criteria — enough to judge the diff without re-deriving the task from
+scratch.
+
+Reviewers are separate subagents with **read-only tools** — they
+structurally cannot edit code, so their only possible output is a structured
+verdict, which they record themselves via `review_verdict(action:'record',
+taskId, reviewerId, verdict, findings, summary?)`. Once every selected
+reviewer has recorded, call `review_verdict(action:'get', taskId)` and read
+the roll-up (`blocking`, `worst`, `byReviewer`): `blocking: true` — any
+reviewer's latest verdict is `block`, or a `revise` no newer verdict has
+cleared — means do not integrate that task; call `replan_record` with a fix
+task scoped to the findings instead, never a verbatim retry. Verdicts are
+advisory-but-gating: a reviewer never touches code, but a block is a hard
+stop on merging, not a suggestion. Reviewers never write production
+features, and you never let a worker's own "looks good" stand in for a
+review.
 
 ## 5. Budget tiers
 

@@ -80,6 +80,22 @@ import {
 import { openMemoryStore, type MemoryStore } from "../memory/index.js";
 import { resolveSuiteName, runCheckSuite, type CheckSuiteResult } from "../checks/index.js";
 import { PlanSchema, type Batch, type ReplanRecord, type Domain, type OrgChart } from "../plan/index.js";
+import {
+  openReviewStore,
+  ReviewFindingSchema,
+  ReviewVerdictOutcomeSchema,
+  type ReviewFinding,
+  type ReviewVerdictOutcome,
+  type ReviewStore
+} from "../review/index.js";
+import {
+  generateSpecialist,
+  retireSpecialist,
+  listSpecialists,
+  type SpecialistMode,
+  type PermissionValue,
+  type SpecialistSpec
+} from "../specialist/index.js";
 
 /**
  * Sentinel routing value (see `config/models.yaml`'s `routing.default`):
@@ -184,6 +200,10 @@ export async function createAgenticMcpServer(opts: CreateAgenticMcpServerOptions
   // run must still see prior runs' mission/decision-log/etc).
   const memory = openMemoryStore(join(stateRoot, "memory"));
 
+  // Reviewer verdict storage: like taskStore, scoped to this run
+  // (<runDir>/reviews/) since a verdict is about work done within this run.
+  const reviewStore = openReviewStore(runDir);
+
   const ctx: ServerCtx = {
     projectDir,
     runDir,
@@ -198,6 +218,7 @@ export async function createAgenticMcpServer(opts: CreateAgenticMcpServerOptions
     cachedFreeModel: undefined,
     taskStore,
     memory,
+    reviewStore,
     worktreeBaseDir,
     serialChains: new Map()
   };
@@ -296,6 +317,8 @@ interface ServerCtx {
   taskStore: TaskCardStore;
   /** Cross-run shared project memory, bound to `<projectDir>/.agentic-os/memory` — NOT under `runDir`. */
   memory: MemoryStore;
+  /** Reviewer verdict storage, bound to `<runDir>/reviews/` — scoped to this run, like `taskStore`. */
+  reviewStore: ReviewStore;
   /** Base directory worktrees (worker worktrees, and `integrate_batch`'s throwaway regression worktree) are provisioned under. */
   worktreeBaseDir: string;
   /**
@@ -1017,6 +1040,83 @@ function registerTools(server: McpServer, ctx: ServerCtx): void {
     },
     async (input) => runTool(ctx, "replan_record", undefined, () => replanRecordHandler(ctx, input))
   );
+
+  // -------------------------------------------------------------------------
+  // Review + specialist tools
+  // -------------------------------------------------------------------------
+
+  server.registerTool(
+    "review_verdict",
+    {
+      title: "Review Verdict",
+      description:
+        "Record or read a reviewer subagent's structured verdict on a task. Reviewer subagents are read-only " +
+        "(Read/Grep/Glob only) — recording here is the ONLY way their judgment reaches the orchestrator, so call " +
+        "'record' after every review pass. A 'revise' or 'block' verdict must cite at least one concrete finding " +
+        "(severity/file/line/note) — a non-pass verdict with zero findings is rejected as isError (anti-rubber-" +
+        "stamp; enforced no matter which reviewer produced it). 'get' returns every stored verdict for a task plus " +
+        "the blocking roll-up in one call: summary.blocking is true, and summary.worst is 'block' or 'revise', when " +
+        "any reviewer's LATEST verdict hasn't cleared — treat that as do-not-integrate, not something to route " +
+        "around.",
+      inputSchema: {
+        action: z.enum(["record", "get"]).describe("'record' persists a verdict; 'get' reads back verdicts plus the blocking roll-up."),
+        taskId: z.string().min(1).describe("Task card id this verdict is about."),
+        reviewerId: z
+          .string()
+          .optional()
+          .describe("Reviewer identity, e.g. 'security', 'architecture'. Required for 'record'; an optional filter for 'get'."),
+        verdict: ReviewVerdictOutcomeSchema.optional().describe("Required for 'record': 'pass' | 'revise' | 'block'."),
+        findings: z
+          .array(ReviewFindingSchema)
+          .optional()
+          .describe("Concrete issues backing the verdict (severity/file/line/note). Required (non-empty) when verdict is 'revise' or 'block'."),
+        summary: z.string().optional().describe("Optional free-text summary of the review.")
+      }
+    },
+    async (input) => runTool(ctx, "review_verdict", undefined, () => reviewVerdictHandler(ctx, input))
+  );
+
+  server.registerTool(
+    "specialist",
+    {
+      title: "Specialist",
+      description:
+        "Generate, retire, or list OpenCode specialist agents (<projectDir>/.opencode/agent/<id>.md). Generate one " +
+        "only when a task genuinely needs a distinct expert persona/system-prompt beyond the standard build agent, " +
+        "and retire it once that work is done — this is a budget, not a default: config.agents." +
+        "max_concurrent_specialists caps how many can exist at once, and 'generate' refuses (isError) at the cap. " +
+        "config.agents.default_permission.deny is always merged into every generated agent's permission map as a " +
+        "safety floor and cannot be relaxed away by the spec's own 'permission' field.",
+      inputSchema: {
+        action: z.enum(["generate", "retire", "list"]).describe("Which specialist operation to perform."),
+        agentId: z
+          .string()
+          .optional()
+          .describe("Path-safe specialist id (lowercase letters/digits/hyphens); also the filename stem. Required for 'generate'/'retire'."),
+        role: z.string().optional().describe("Human-readable role label, e.g. 'OAuth Engineer'. Required for 'generate'."),
+        description: z
+          .string()
+          .optional()
+          .describe("Shown to OpenCode's agent selector to decide when to route to this specialist. Required for 'generate'."),
+        systemPrompt: z
+          .string()
+          .optional()
+          .describe("The specialist's system prompt; becomes the generated agent file's markdown body. Required for 'generate'."),
+        mode: z.enum(["subagent", "primary", "all"]).optional().describe("OpenCode agent mode; defaults to 'subagent'."),
+        model: z.string().optional().describe("Explicit 'provider/model' string; omit to inherit the caller's model."),
+        temperature: z.number().optional().describe("Sampling temperature override."),
+        steps: z.number().int().positive().optional().describe("Max agent steps override."),
+        permission: z
+          .record(z.string(), z.enum(["allow", "ask", "deny"]))
+          .optional()
+          .describe(
+            "Command-glob -> allow|ask|deny overrides. config.agents.default_permission.deny is always merged in " +
+              "afterward as a floor, regardless of what's set here."
+          )
+      }
+    },
+    async (input) => runTool(ctx, "specialist", undefined, () => specialistHandler(ctx, input))
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -1030,6 +1130,29 @@ interface SpawnWorkerInput {
   model?: string | undefined;
   agentId?: string | undefined;
   baseBranch?: string | undefined;
+}
+
+/**
+ * Resolves `config.models.downgrade_on_soft_cap` to a concrete model value
+ * for `spawnWorkerHandler`'s soft-cap auto-downgrade. `downgrade_on_soft_cap`
+ * (`config/schema.ts`'s `ModelsFileSchema`) is a KEY into `models.yaml`
+ * (e.g. "small_model"), not the model value itself -- `ModelsFile`'s shape
+ * only names `routing`/`downgrade_on_soft_cap`/`small_model` explicitly
+ * rather than as an open record, so this indexes it dynamically and returns
+ * `undefined` for an absent key or one that doesn't resolve to a string
+ * (misconfiguration), rather than throwing and failing the whole spawn over
+ * a downgrade that was never mandatory. If that resolved value is itself
+ * `AUTO_FREE_MODEL`, it flows into the same auto:free resolution below as
+ * any other model would -- the downgrade only needs to pick a route, not a
+ * concrete provider/model string.
+ */
+function resolveDowngradeModel(config: OrchestratorConfig): string | undefined {
+  const key = config.models.downgrade_on_soft_cap;
+  if (!key) {
+    return undefined;
+  }
+  const value = (config.models as unknown as Record<string, unknown>)[key];
+  return typeof value === "string" ? value : undefined;
 }
 
 async function spawnWorkerHandler(ctx: ServerCtx, input: SpawnWorkerInput): Promise<ToolOutcome> {
@@ -1049,6 +1172,30 @@ async function spawnWorkerHandler(ctx: ServerCtx, input: SpawnWorkerInput): Prom
   }
 
   let model = input.model ?? resolveModelRoute(ctx.config, input.taskType);
+
+  // Budget soft-cap auto-downgrade (config.models.downgrade_on_soft_cap): once
+  // the run is over softCapUsd (but not yet hard-capped -- reserve() below
+  // refuses that case outright), swap in the configured cheaper model instead
+  // of the normal taskType/default route, UNLESS the caller pinned an
+  // explicit `model` themselves (an explicit choice stays authoritative even
+  // under budget pressure). Checked here, before reserve()/spawn(), against
+  // the PRE-spawn tier -- this reservation hasn't happened yet, so
+  // ctx.budget.tier() reflects the run's state as of the last completed
+  // spawn/reconcile, which is exactly "was the run already over budget before
+  // this call" per the calling contract.
+  if (input.model === undefined && ctx.budget.tier() === "soft") {
+    const downgradeModel = resolveDowngradeModel(ctx.config);
+    if (downgradeModel !== undefined) {
+      await ctx.runEventLog.append({
+        type: "model_downgraded",
+        from: model,
+        to: downgradeModel,
+        reason: "soft_cap"
+      });
+      model = downgradeModel;
+    }
+  }
+
   if (model === AUTO_FREE_MODEL) {
     let resolved: ResolveFreeModelResult;
     try {
@@ -1829,4 +1976,122 @@ async function replanRecordHandler(ctx: ServerCtx, input: ReplanRecordInput): Pr
       }
     };
   });
+}
+
+// ---------------------------------------------------------------------------
+// Review + specialist tool handlers
+// ---------------------------------------------------------------------------
+
+interface ReviewVerdictToolInput {
+  action: "record" | "get";
+  taskId: string;
+  reviewerId?: string | undefined;
+  verdict?: ReviewVerdictOutcome | undefined;
+  findings?: ReviewFinding[] | undefined;
+  summary?: string | undefined;
+}
+
+async function reviewVerdictHandler(ctx: ServerCtx, input: ReviewVerdictToolInput): Promise<ToolOutcome> {
+  if (input.action === "record") {
+    if (!input.reviewerId || !input.verdict) {
+      throw new Error("'reviewerId' and 'verdict' are required for action 'record'");
+    }
+    // ReviewVerdictInputSchema (review/schema.ts) rejects a non-'pass'
+    // verdict with zero findings, and its taskId/reviewerId fields reject
+    // path-unsafe ids -- recordVerdict throws a formatted Error in either
+    // case. Neither is caught here: it bubbles to runTool's catch-all (see
+    // above), which is what turns every handler's thrown error into a clean
+    // isError CallToolResult rather than a protocol-level failure.
+    const result = await ctx.reviewStore.recordVerdict({
+      taskId: input.taskId,
+      reviewerId: input.reviewerId,
+      verdict: input.verdict,
+      findings: input.findings ?? [],
+      summary: input.summary,
+      at: Date.now()
+    });
+    return {
+      payload: { taskId: result.taskId, reviewerId: result.reviewerId, verdict: input.verdict, path: result.path }
+    };
+  }
+
+  // action === "get" -- getVerdicts/summarizeTask each assert taskId/
+  // reviewerId path-safety themselves (review/index.ts); an invalid id
+  // throws and bubbles to runTool's catch-all the same way as 'record' above.
+  const [verdicts, summary] = await Promise.all([
+    ctx.reviewStore.getVerdicts(input.taskId, input.reviewerId),
+    ctx.reviewStore.summarizeTask(input.taskId)
+  ]);
+  return { payload: { verdicts, summary } };
+}
+
+interface SpecialistToolInput {
+  action: "generate" | "retire" | "list";
+  agentId?: string | undefined;
+  role?: string | undefined;
+  description?: string | undefined;
+  systemPrompt?: string | undefined;
+  mode?: SpecialistMode | undefined;
+  model?: string | undefined;
+  temperature?: number | undefined;
+  steps?: number | undefined;
+  permission?: Record<string, PermissionValue> | undefined;
+}
+
+async function specialistHandler(ctx: ServerCtx, input: SpecialistToolInput): Promise<ToolOutcome> {
+  switch (input.action) {
+    case "generate": {
+      if (!input.agentId || !input.role || !input.description || !input.systemPrompt) {
+        throw new Error("'agentId', 'role', 'description', and 'systemPrompt' are required for action 'generate'");
+      }
+
+      // Budget, not a default: refuse to create another specialist once
+      // max_concurrent_specialists are already live, rather than letting the
+      // roster grow unbounded. generateSpecialist itself still validates
+      // agentId's path-safety (specialist/index.ts's assertValidAgentId) --
+      // that error path is left to bubble to runTool's catch-all below,
+      // same as review_verdict above.
+      const cap = ctx.config.agents.max_concurrent_specialists;
+      const existing = await listSpecialists(ctx.projectDir);
+      if (existing.length >= cap) {
+        return {
+          isError: true,
+          payload: {
+            error:
+              `Refusing to generate specialist '${input.agentId}': config.agents.max_concurrent_specialists ` +
+              `(${cap}) already reached (${existing.length} active). Retire one first.`
+          }
+        };
+      }
+
+      const spec: SpecialistSpec = {
+        agentId: input.agentId,
+        role: input.role,
+        description: input.description,
+        systemPrompt: input.systemPrompt,
+        mode: input.mode,
+        model: input.model,
+        temperature: input.temperature,
+        steps: input.steps,
+        permission: input.permission
+      };
+      const result = await generateSpecialist({
+        projectDir: ctx.projectDir,
+        spec,
+        denyFloor: ctx.config.agents.default_permission.deny
+      });
+      return { payload: { agentId: result.agentId, path: result.path } };
+    }
+    case "retire": {
+      if (!input.agentId) {
+        throw new Error("'agentId' is required for action 'retire'");
+      }
+      const result = await retireSpecialist({ projectDir: ctx.projectDir, agentId: input.agentId });
+      return { payload: { removed: result.removed } };
+    }
+    case "list": {
+      const specialists = await listSpecialists(ctx.projectDir);
+      return { payload: { specialists } };
+    }
+  }
 }
