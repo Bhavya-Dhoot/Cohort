@@ -21,6 +21,12 @@ import { atomicWriteJson } from "../lib/fs.js";
  *    serialized through a per-section promise chain -- the same technique
  *    `openEventLog` (events/index.ts) uses -- so concurrent `appendEntry`
  *    calls never interleave their writes.
+ *
+ * Writes to a given section (via either `writeSection` or `appendEntry`)
+ * share one per-section promise chain, so concurrent calls targeting the
+ * same section are serialized rather than racing the same temp-file+rename
+ * target -- a raw concurrent-rename collision onto one destination path can
+ * throw (e.g. EPERM on Windows) instead of safely no-op-overwriting.
  */
 
 export type SectionKind = "snapshot-md" | "snapshot-json" | "append";
@@ -151,9 +157,11 @@ export function openMemoryStore(dir: string, opts?: OpenMemoryStoreOptions): Mem
     }
   }
 
-  // Per-section promise chains so concurrent appendEntry calls on the same
-  // section serialize their writes (different sections append independently).
-  const appendChains = new Map<string, Promise<unknown>>();
+  // Per-section promise chains so concurrent writeSection/appendEntry calls
+  // on the same section serialize their writes (different sections write
+  // independently). Shared by both methods since they write to the same
+  // per-name file path -- see openMemoryStore's doc comment.
+  const sectionChains = new Map<string, Promise<unknown>>();
 
   function resolve(name: string): { kind: SectionKind; path: string } {
     const kind = kinds.get(name);
@@ -176,19 +184,26 @@ export function openMemoryStore(dir: string, opts?: OpenMemoryStoreOptions): Mem
         `Section "${name}" is append-only; use appendEntry, not writeSection.`
       );
     }
+    let parsedJson: unknown;
     if (kind === "snapshot-json") {
-      let parsed: unknown;
       try {
-        parsed = JSON.parse(content);
+        parsedJson = JSON.parse(content);
       } catch (err) {
         throw new Error(
           `Section "${name}" content is not valid JSON: ${(err as Error).message}`
         );
       }
-      await atomicWriteJson(path, parsed);
-      return;
     }
-    await atomicWriteText(path, content);
+    const prior = sectionChains.get(name) ?? Promise.resolve();
+    const task = prior.then(async () => {
+      if (kind === "snapshot-json") {
+        await atomicWriteJson(path, parsedJson);
+      } else {
+        await atomicWriteText(path, content);
+      }
+    });
+    sectionChains.set(name, task.catch(() => undefined));
+    await task;
   }
 
   async function appendEntry(name: string, entry: Record<string, unknown>): Promise<void> {
@@ -198,13 +213,13 @@ export function openMemoryStore(dir: string, opts?: OpenMemoryStoreOptions): Mem
         `Section "${name}" is not append-only; use writeSection, not appendEntry.`
       );
     }
-    const prior = appendChains.get(name) ?? Promise.resolve();
+    const prior = sectionChains.get(name) ?? Promise.resolve();
     const task = prior.then(async () => {
       const stamped = { ...entry, ts: Date.now() };
       await mkdir(dirname(path), { recursive: true });
       await appendFile(path, `${JSON.stringify(stamped)}\n`, "utf8");
     });
-    appendChains.set(name, task.catch(() => undefined));
+    sectionChains.set(name, task.catch(() => undefined));
     await task;
   }
 

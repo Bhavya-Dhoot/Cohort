@@ -41,6 +41,43 @@ describe("readSection/writeSection roundtrip", () => {
     const store = openMemoryStore(dir);
     await expect(store.readSection("architecture")).resolves.toBeUndefined();
   });
+
+  it("serializes concurrent writeSection calls to the same section without a torn/partial write", async () => {
+    const store = openMemoryStore(dir);
+
+    const results = await Promise.allSettled(
+      Array.from({ length: 20 }, (_, i) =>
+        store.writeSection("task-graph", JSON.stringify({ v: i }))
+      )
+    );
+    expect(results.every((r) => r.status === "fulfilled")).toBe(true);
+
+    const raw = await store.readSection("task-graph");
+    expect(raw).toBeDefined();
+    const parsed = JSON.parse(raw!) as { v: number };
+    expect(parsed.v).toBeGreaterThanOrEqual(0);
+    expect(parsed.v).toBeLessThan(20);
+  });
+
+  it("lets writeSection on one section interleave safely with appendEntry on another", async () => {
+    const store = openMemoryStore(dir);
+
+    await Promise.all([
+      ...Array.from({ length: 10 }, (_, i) =>
+        store.writeSection("progress", `# Progress ${i}\n`)
+      ),
+      ...Array.from({ length: 10 }, (_, i) => store.appendEntry("decision-log", { i }))
+    ]);
+
+    const progress = await store.readSection("progress");
+    expect(progress).toMatch(/^# Progress \d\n$/);
+
+    const log = await store.readSection("decision-log");
+    const lines = log!.trim().split("\n");
+    expect(lines).toHaveLength(10);
+    const parsed = lines.map((l) => JSON.parse(l) as { i: number });
+    expect(parsed.map((e) => e.i)).toEqual(Array.from({ length: 10 }, (_, i) => i));
+  });
 });
 
 describe("appendEntry", () => {

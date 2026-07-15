@@ -84,7 +84,7 @@ export function validateDag(tasks: TaskCard[]): DagValidation {
 }
 
 function isWildcardSegment(segment: string): boolean {
-  return segment.includes("*") || segment.includes("?");
+  return /[*?{}[\]]/.test(segment);
 }
 
 /**
@@ -93,12 +93,16 @@ function isWildcardSegment(segment: string): boolean {
  * Bias: two globs are treated as overlapping UNLESS their path segments,
  * compared left-to-right, provably diverge on a literal (non-wildcard)
  * segment before either side introduces a wildcard. As soon as a wildcard
- * segment (contains `*` or `?`) is reached, we stop trying to prove
- * divergence and call it an overlap — a real glob library could tell
- * `src/a-*.ts` from `src/b-*.ts` apart, this hand-rolled version can't and
- * doesn't try. Two literal (no-wildcard-anywhere) globs of different
+ * segment (contains `*`, `?`, `{`, `}`, `[`, or `]`) is reached, we stop
+ * trying to prove divergence and call it an overlap — a real glob library
+ * could tell `src/a-*.ts` from `src/b-*.ts` apart, this hand-rolled version
+ * can't and doesn't try. Two literal (no-wildcard-anywhere) globs of different
  * length are NOT treated as one owning a subtree of the other (no implicit
  * directory-prefix semantics) — they only overlap if exactly equal.
+ *
+ * Comparison is case-insensitive and normalizes `\` to `/` before splitting
+ * into segments, since Windows/git treat paths as case-insensitive and a
+ * stray backslash-style path must not be allowed to defeat segment matching.
  *
  * This bias is deliberate and one-directional: false positives just
  * serialize two tasks that could have run concurrently (safe, just
@@ -118,12 +122,15 @@ export function globsOverlap(a: string[], b: string[]): boolean {
 }
 
 function singleGlobOverlap(a: string, b: string): boolean {
-  if (a === b) {
+  const normA = a.replace(/\\/g, "/").toLowerCase();
+  const normB = b.replace(/\\/g, "/").toLowerCase();
+
+  if (normA === normB) {
     return true;
   }
 
-  const segsA = a.split("/");
-  const segsB = b.split("/");
+  const segsA = normA.split("/");
+  const segsB = normB.split("/");
   const len = Math.min(segsA.length, segsB.length);
 
   for (let i = 0; i < len; i++) {

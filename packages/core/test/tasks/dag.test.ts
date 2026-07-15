@@ -106,6 +106,18 @@ describe("globsOverlap", () => {
   });
 });
 
+describe("globsOverlap false-negative regressions (case, separators, brace/bracket globs)", () => {
+  it.each([
+    ["case drift (lower vs upper)", ["src/Utils/Helper.ts"], ["src/utils/Helper.ts"]],
+    ["case drift (upper vs lower)", ["src/utils/Helper.ts"], ["src/Utils/Helper.ts"]],
+    ["backslash vs forward-slash naming the same file", ["packages\\core\\src\\tasks\\dag.ts"], ["packages/core/src/tasks/dag.ts"]],
+    ["brace-alternation glob vs literal", ["src/components/Button.tsx"], ["src/components/Button.{ts,tsx}"]],
+    ["bracket-class glob vs literal", ["x.ts"], ["x.[jt]s"]]
+  ] as const)("%s must overlap", (_label, a, b) => {
+    expect(globsOverlap([...a], [...b])).toBe(true);
+  });
+});
+
 describe("selectBatch", () => {
   it("gates a task on unmet deps with a deps reason", () => {
     const tasks = [

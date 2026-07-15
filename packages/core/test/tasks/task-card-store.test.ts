@@ -104,6 +104,25 @@ describe("TaskCardStore putMany", () => {
     await reopened.load();
     expect(reopened.list().map((t) => t.id).sort()).toEqual(["a", "b"]);
   });
+
+  it("rejects if an incoming id already exists in the store, naming the colliding id, and leaves the store unchanged", async () => {
+    const store = new TaskCardStore(filePath);
+    await store.load();
+    await store.put(makeCard({ id: "a", status: "assigned" }));
+
+    await expect(
+      store.putMany([makeCard({ id: "b" }), makeCard({ id: "a", status: "pending" })])
+    ).rejects.toThrow(/\ba\b/);
+
+    // Whole call rejected up front: "b" (not colliding) must not have been
+    // inserted either, and "a" must not have been reverted to pending.
+    expect(store.list().map((t) => t.id).sort()).toEqual(["a"]);
+    expect(store.get("a")!.status).toBe("assigned");
+
+    const reopened = new TaskCardStore(filePath);
+    await reopened.load();
+    expect(reopened.list().map((t) => t.id)).toEqual(["a"]);
+  });
 });
 
 describe("TaskCardStore markAssigned", () => {
@@ -145,5 +164,30 @@ describe("TaskCardStore markAssigned", () => {
     const reopened = new TaskCardStore(filePath);
     await reopened.load();
     expect(reopened.get("a")).toMatchObject({ status: "assigned", meta: { batchId: "batch-2" } });
+  });
+});
+
+describe("TaskCardStore concurrent persists", () => {
+  it("markAssigned and putMany run concurrently without losing either update on disk", async () => {
+    const store = new TaskCardStore(filePath);
+    await store.load();
+    await store.put(makeCard({ id: "a", status: "pending" }));
+
+    // Simulates next_batch's markAssigned racing replan_record's putMany
+    // against the same shared store -- both mutate the in-memory map
+    // synchronously and then race to persist the whole board.
+    await Promise.all([
+      store.markAssigned(["a"], "batch-1"),
+      store.putMany([makeCard({ id: "b", status: "pending" })])
+    ]);
+
+    expect(store.get("a")).toMatchObject({ status: "assigned", meta: { batchId: "batch-1" } });
+    expect(store.get("b")).toMatchObject({ status: "pending" });
+
+    const reopened = new TaskCardStore(filePath);
+    await reopened.load();
+    expect(reopened.list().map((t) => t.id).sort()).toEqual(["a", "b"]);
+    expect(reopened.get("a")).toMatchObject({ status: "assigned", meta: { batchId: "batch-1" } });
+    expect(reopened.get("b")).toMatchObject({ status: "pending" });
   });
 });

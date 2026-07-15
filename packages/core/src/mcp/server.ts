@@ -198,7 +198,8 @@ export async function createAgenticMcpServer(opts: CreateAgenticMcpServerOptions
     cachedFreeModel: undefined,
     taskStore,
     memory,
-    worktreeBaseDir
+    worktreeBaseDir,
+    serialChains: new Map()
   };
 
   const server = new McpServer({ name: "agentic-os", version: "0.1.0" });
@@ -297,6 +298,16 @@ interface ServerCtx {
   memory: MemoryStore;
   /** Base directory worktrees (worker worktrees, and `integrate_batch`'s throwaway regression worktree) are provisioned under. */
   worktreeBaseDir: string;
+  /**
+   * Keyed per-process critical-section chains — see `runSerialized`. Used to
+   * serialize `replan_record`'s iteration-counter read-then-write, artifact
+   * index allocation (`checks/`/`replans/` `<n>.json` files), and every
+   * operation that mutates `projectDir`'s shared git checkout
+   * (`integrate_batch`'s merge sequence and `finalize_worker('merge')`),
+   * mirroring the `ioChain` pattern already used by `budget/index.ts` and
+   * `TaskCardStore`.
+   */
+  serialChains: Map<string, Promise<unknown>>;
 }
 
 /** A tool handler's outcome before it's wrapped into an MCP `CallToolResult`. */
@@ -402,11 +413,49 @@ async function reconcileUsage(ctx: ServerCtx, workerId: string, usage: SessionUs
   }
 }
 
+/**
+ * Runs `fn` strictly after every previously-queued call under the same
+ * `key` on this `ServerCtx` has settled, serializing concurrent tool-call
+ * handlers that would otherwise race a shared read-then-write critical
+ * section within this process — same technique as `budget/index.ts`'s
+ * `ioChain` and `TaskCardStore`'s persist chain, generalized to a keyed map
+ * so unrelated critical sections (e.g. `replan_record`'s counter vs.
+ * `integrate_batch`'s git checkout) don't serialize against each other.
+ * This is an in-process mutex only — it does not protect against two
+ * separate MCP server processes racing the same on-disk files.
+ */
+function runSerialized<T>(ctx: ServerCtx, key: string, fn: () => Promise<T>): Promise<T> {
+  const prior = ctx.serialChains.get(key) ?? Promise.resolve();
+  const task = prior.then(() => fn());
+  // Keep the chain alive even if this call fails, so later calls under the
+  // same key still run (each still observes its own failure via `task`).
+  ctx.serialChains.set(
+    key,
+    task.then(
+      () => undefined,
+      () => undefined
+    )
+  );
+  return task;
+}
+
 /** See module doc point 2: resolves (once) the base ref a fresh `WorkerSupervisor` would resolve on its own. */
 async function resolveDefaultBaseRef(ctx: ServerCtx): Promise<string> {
   if (ctx.cachedBaseRef === undefined) {
     const { stdout } = await runGit(["rev-parse", "--abbrev-ref", "HEAD"], ctx.projectDir);
-    ctx.cachedBaseRef = stdout.trim();
+    const ref = stdout.trim();
+    if (ref === "HEAD") {
+      // `git rev-parse --abbrev-ref HEAD` prints the literal string "HEAD"
+      // when projectDir is in detached-HEAD state — not a usable branch
+      // name. Fail fast here (mirrors worker/index.ts's resolveBaseRef)
+      // instead of silently caching "HEAD" and only discovering the problem
+      // later when integrate_batch's switch-back calls `git switch -- HEAD`
+      // and throws after merges/task-card updates already landed.
+      throw new Error(
+        "repository must be on a branch; detached HEAD unsupported (spawn_worker/integrate_batch)"
+      );
+    }
+    ctx.cachedBaseRef = ref;
   }
   return ctx.cachedBaseRef;
 }
@@ -446,6 +495,25 @@ async function findWorkerForTask(ctx: ServerCtx, taskId: string): Promise<Worker
   return matches.reduce((latest, m) => (m.createdAt > latest.createdAt ? m : latest));
 }
 
+/**
+ * Reverts `taskId`'s card from `assigned` back to `pending` (clearing the
+ * `meta.batchId` stamp `markAssigned` set) if that's its current status —
+ * called from every `spawn_worker` failure/refusal path so a task
+ * `next_batch` marked `assigned` doesn't get stranded forever when the
+ * worker it was assigned to never actually starts: `selectBatch` only ever
+ * re-offers `pending` cards, and nothing else in this module transitions a
+ * card off `assigned` on a failure path. No-op if the card is missing or
+ * already in some other status.
+ */
+async function releaseTaskAssignment(ctx: ServerCtx, taskId: string): Promise<void> {
+  const card = ctx.taskStore.get(taskId);
+  if (card && card.status === "assigned") {
+    const meta = { ...card.meta };
+    delete meta.batchId;
+    await ctx.taskStore.put({ ...card, status: "pending", meta });
+  }
+}
+
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
@@ -472,6 +540,26 @@ async function nextArtifactIndex(dir: string, prefix: string): Promise<number> {
     }
   }
   return max + 1;
+}
+
+/**
+ * Allocates the next `<prefix>-<n>.json` index in `dir` and writes `data`
+ * to it, with the allocate-and-write pair serialized (per `dir`+`prefix`,
+ * via `runSerialized`) against every other call sharing that same key —
+ * `nextArtifactIndex`'s readdir-then-max is otherwise a TOCTOU: two
+ * concurrent callers (e.g. two `integrate_batch` calls resolving the same
+ * configured regression suite, or two `run_check_suite` calls with the same
+ * scope+suite) can compute the same `n` and race their renames onto the
+ * identical destination path (observed to throw `EPERM` on Windows rather
+ * than safely no-op-overwriting).
+ */
+async function writeNextArtifact(ctx: ServerCtx, dir: string, prefix: string, data: unknown): Promise<string> {
+  return runSerialized(ctx, `artifact:${dir}::${prefix}`, async () => {
+    const idx = await nextArtifactIndex(dir, prefix);
+    const path = join(dir, `${prefix}-${idx}.json`);
+    await atomicWriteJson(path, data);
+    return path;
+  });
 }
 
 /**
@@ -948,6 +1036,7 @@ async function spawnWorkerHandler(ctx: ServerCtx, input: SpawnWorkerInput): Prom
   if (input.baseBranch !== undefined) {
     const effectiveBaseRef = await resolveDefaultBaseRef(ctx);
     if (input.baseBranch !== effectiveBaseRef) {
+      await releaseTaskAssignment(ctx, input.taskId);
       return {
         isError: true,
         payload: {
@@ -965,6 +1054,7 @@ async function spawnWorkerHandler(ctx: ServerCtx, input: SpawnWorkerInput): Prom
     try {
       resolved = await resolveAutoFreeModel(ctx);
     } catch (err) {
+      await releaseTaskAssignment(ctx, input.taskId);
       return {
         isError: true,
         payload: {
@@ -980,6 +1070,12 @@ async function spawnWorkerHandler(ctx: ServerCtx, input: SpawnWorkerInput): Prom
 
   const reserved = await ctx.budget.reserve(workerId);
   if (!reserved.allowed) {
+    // Budget refused, so no worker was (or ever will be) created for this
+    // taskId on this attempt — a task next_batch marked 'assigned' must not
+    // be left stranded there forever (it would never be re-selected by a
+    // later next_batch, and would keep blocking file-ownership-overlapping
+    // siblings as "active"). See releaseTaskAssignment.
+    await releaseTaskAssignment(ctx, input.taskId);
     return {
       isError: true,
       workerId,
@@ -1006,6 +1102,7 @@ async function spawnWorkerHandler(ctx: ServerCtx, input: SpawnWorkerInput): Prom
     // instead. Report that as an isError so the caller doesn't mistake it for
     // a started worker, and release the reservation since nothing was spent.
     await ctx.budget.reconcile(workerId, 0);
+    await releaseTaskAssignment(ctx, input.taskId);
     return {
       isError: true,
       workerId: meta.workerId,
@@ -1153,7 +1250,18 @@ interface FinalizeWorkerInput {
 }
 
 async function finalizeWorkerHandler(ctx: ServerCtx, input: FinalizeWorkerInput): Promise<ToolOutcome> {
-  const meta = await ctx.supervisor.finalize(input.workerId, input.action, input.targetBranch);
+  // 'merge' switches/merges directly against the shared projectDir checkout
+  // (same mechanism integrate_batch's merge sequence uses) — serialize it
+  // through the same "repo-mutation" chain integrateBatchHandler uses so the
+  // two can't interleave their git operations against one working tree.
+  // 'discard' only removes a worktree/branch and never touches projectDir's
+  // checkout, so it doesn't need to serialize against either.
+  const meta =
+    input.action === "merge"
+      ? await runSerialized(ctx, "repo-mutation", () =>
+          ctx.supervisor.finalize(input.workerId, input.action, input.targetBranch)
+        )
+      : await ctx.supervisor.finalize(input.workerId, input.action, input.targetBranch);
   return {
     workerId: meta.workerId,
     payload: {
@@ -1303,6 +1411,19 @@ interface IntegrateBatchInput {
 }
 
 async function integrateBatchHandler(ctx: ServerCtx, input: IntegrateBatchInput): Promise<ToolOutcome> {
+  // Every operation that mutates the shared projectDir git checkout
+  // (this merge sequence, and finalize_worker('merge')) is serialized
+  // through the same "repo-mutation" chain, so re-entrant/concurrent
+  // integrate_batch calls (for the same or different batches) and
+  // finalize_worker('merge') calls can never interleave their `git
+  // switch`/`git merge` sequences against the one working tree. The
+  // idempotency check just inside re-reads batch.json AFTER acquiring this
+  // slot, so a second call queued up behind an in-flight one observes the
+  // first call's terminal status rather than a stale pre-lock snapshot.
+  return runSerialized(ctx, "repo-mutation", () => doIntegrateBatch(ctx, input));
+}
+
+async function doIntegrateBatch(ctx: ServerCtx, input: IntegrateBatchInput): Promise<ToolOutcome> {
   const batch = await readJsonIfExists<Batch>(batchPath(ctx, input.batchId));
   if (!batch) {
     throw new Error(`Unknown batch '${input.batchId}'`);
@@ -1330,9 +1451,76 @@ async function integrateBatchHandler(ctx: ServerCtx, input: IntegrateBatchInput)
     }
   }
 
+  // Idempotent: a batch that already fully integrated has nothing left to
+  // merge (re-running mergeInDagOrder against branches already merged into
+  // the integration branch would be redundant at best). Return its
+  // persisted state (plus a freshly-computed notVerified, which is a cheap
+  // read with no git mutation) instead of re-doing any git work. A 'failed'
+  // batch is deliberately NOT short-circuited here — conflicting/skipped
+  // tasks are documented as retryable via a later integrate_batch call.
+  if (batch.status === "integrated") {
+    return {
+      payload: {
+        integrationBranch: batch.integrationBranch,
+        merges: [],
+        notVerified,
+        regressionCheck: null,
+        note: "Batch already integrated; returning existing state without re-merging.",
+        allMerged: true,
+        allPassed: true
+      }
+    };
+  }
+
+  // Nothing verified to merge: don't touch projectDir's checkout or
+  // provision the integration branch/any worktree at all — there is
+  // nothing for git to do. Report this plainly (not a vacuous
+  // allMerged/allPassed:true over an empty merge set) and leave the batch
+  // in a terminal-but-not-successful state rather than erroring.
+  if (merges.length === 0) {
+    await atomicWriteJson(batchPath(ctx, batch.batchId), { ...batch, status: "failed" });
+    return {
+      payload: {
+        integrationBranch: batch.integrationBranch,
+        merges: [],
+        notVerified,
+        regressionCheck: null,
+        note: "No verified workers to merge for this batch — nothing to integrate.",
+        allMerged: false,
+        allPassed: false
+      }
+    };
+  }
+
+  // Resolve (and validate) the regression suite name BEFORE merging
+  // anything or writing status 'integrating': an unknown/misconfigured
+  // suite must fail fast, before any git state or task-card status
+  // changes, rather than throwing after merges + card updates are already
+  // durably persisted (which used to strand batch.json at 'integrating'
+  // forever with no integrationBranch recorded).
+  let suiteName = input.regressionSuite;
+  if (!suiteName) {
+    try {
+      suiteName = resolveSuiteName(ctx.config.orchestrator.checks?.usage, "regression");
+    } catch {
+      suiteName = undefined;
+    }
+  }
+  const suites = ctx.config.orchestrator.checks?.suites ?? {};
+  if (suiteName && suites[suiteName] === undefined) {
+    const available = Object.keys(suites).sort().join(", ") || "(none configured)";
+    return {
+      isError: true,
+      payload: { error: `Unknown check suite "${suiteName}". Available suites: ${available}` }
+    };
+  }
+
+  // Also fail fast (before 'integrating'/any merge) on a detached-HEAD
+  // projectDir — see resolveDefaultBaseRef's guard.
+  const baseRef = await resolveDefaultBaseRef(ctx);
+
   await atomicWriteJson(batchPath(ctx, batch.batchId), { ...batch, status: "integrating" });
 
-  const baseRef = await resolveDefaultBaseRef(ctx);
   const { branchName: integrationBranch } = await ensureIntegrationBranch({
     repoDir: ctx.projectDir,
     runId: ctx.runId,
@@ -1352,10 +1540,9 @@ async function integrateBatchHandler(ctx: ServerCtx, input: IntegrateBatchInput)
   // projectDir: this both restores the caller's checkout and frees
   // integrationBranch to be checked out in the throwaway regression
   // worktree below (git refuses to have the same branch checked out in two
-  // worktrees at once).
-  if (merges.length > 0) {
-    await runGit(["switch", "--", baseRef], ctx.projectDir);
-  }
+  // worktrees at once). merges.length > 0 is guaranteed here (the
+  // zero-merge case already returned above), so this always runs.
+  await runGit(["switch", "--", baseRef], ctx.projectDir);
 
   for (const outcome of mergeResult.results) {
     const card = ctx.taskStore.get(outcome.taskId);
@@ -1375,26 +1562,15 @@ async function integrateBatchHandler(ctx: ServerCtx, input: IntegrateBatchInput)
 
   let regressionCheck: CheckSuiteResult | null = null;
   let regressionNote: string | undefined;
-  let suiteName = input.regressionSuite;
-  if (!suiteName) {
-    try {
-      suiteName = resolveSuiteName(ctx.config.orchestrator.checks?.usage, "regression");
-    } catch {
-      suiteName = undefined;
-    }
-  }
-
   if (suiteName) {
+    // suiteName was already validated against `suites` above, so this
+    // shouldn't throw for a config-mismatch reason — but the throwaway
+    // worktree must still always be cleaned up regardless of outcome.
     const tempWorktreePath = worktreePathFor(ctx.worktreeBaseDir, ctx.runId, `integ-${batch.batchId}`);
     try {
       await addExistingBranchWorktree(ctx.projectDir, tempWorktreePath, integrationBranch);
-      regressionCheck = await runCheckSuite({
-        cwd: tempWorktreePath,
-        suiteName,
-        suites: ctx.config.orchestrator.checks?.suites ?? {}
-      });
-      const idx = await nextArtifactIndex(checksDir(ctx), `integration-${suiteName}`);
-      await atomicWriteJson(join(checksDir(ctx), `integration-${suiteName}-${idx}.json`), regressionCheck);
+      regressionCheck = await runCheckSuite({ cwd: tempWorktreePath, suiteName, suites });
+      await writeNextArtifact(ctx, checksDir(ctx), `integration-${suiteName}`, regressionCheck);
     } finally {
       await removeWorktree({ repoDir: ctx.projectDir, worktreePath: tempWorktreePath, force: true });
     }
@@ -1461,8 +1637,7 @@ async function runCheckSuiteHandler(ctx: ServerCtx, input: RunCheckSuiteInput): 
     suites: ctx.config.orchestrator.checks?.suites ?? {}
   });
 
-  const idx = await nextArtifactIndex(checksDir(ctx), `${scope}-${input.suiteName}`);
-  await atomicWriteJson(join(checksDir(ctx), `${scope}-${input.suiteName}-${idx}.json`), result);
+  await writeNextArtifact(ctx, checksDir(ctx), `${scope}-${input.suiteName}`, result);
 
   return { workerId: input.workerId, payload: { ...result } };
 }
@@ -1517,60 +1692,93 @@ interface ReplanRecordInput {
 }
 
 async function replanRecordHandler(ctx: ServerCtx, input: ReplanRecordInput): Promise<ToolOutcome> {
-  const dir = replansDir(ctx);
-  let entries: string[] = [];
-  try {
-    entries = await readdir(dir);
-  } catch {
-    entries = [];
-  }
-  const iterations = entries
-    .map((f) => /^(\d+)\.json$/.exec(f))
-    .filter((m): m is RegExpExecArray => m !== null)
-    .map((m) => Number(m[1]));
-  const currentMax = iterations.length > 0 ? Math.max(...iterations) : 0;
-  const nextIteration = currentMax + 1;
-  const maxIterations = ctx.config.orchestrator.replan.maxIterations;
-
-  if (nextIteration > maxIterations) {
-    return { payload: { escalate: true, iteration: nextIteration, capRemaining: 0 } };
-  }
-
-  const now = Date.now();
-  const newCards: TaskCard[] = (input.newTasks ?? []).map(
-    (task): TaskCard => ({
-      ...task,
-      status: "pending",
-      createdAt: now,
-      updatedAt: now
-    })
-  );
-  if (newCards.length > 0) {
-    await ctx.taskStore.putMany(newCards);
-  }
-
-  const record: ReplanRecord = {
-    iteration: nextIteration,
-    reason: input.reason,
-    affectedTaskIds: input.affectedTaskIds,
-    newTaskIds: newCards.map((c) => c.id),
-    at: now
-  };
-  await atomicWriteJson(join(dir, `${nextIteration}.json`), record);
-  await ctx.memory.appendEntry("decision-log", {
-    type: "replan",
-    iteration: nextIteration,
-    reason: input.reason,
-    affectedTaskIds: input.affectedTaskIds,
-    newTaskIds: record.newTaskIds
-  });
-
-  return {
-    payload: {
-      iteration: nextIteration,
-      capRemaining: maxIterations - nextIteration,
-      escalate: false,
-      newTaskIds: record.newTaskIds
+  // The iteration counter (readdir replansDir, take max, +1) is a
+  // read-then-write critical section shared by every replan_record call in
+  // this process — serialize it through the "repo"-independent "replan"
+  // chain so two overlapping calls can't both observe the same currentMax,
+  // both pass the maxIterations cap check, and race their writes onto the
+  // same replans/<n>.json (previously a TOCTOU that could silently let the
+  // run exceed maxIterations — see runSerialized).
+  return runSerialized(ctx, "replan", async () => {
+    const dir = replansDir(ctx);
+    let entries: string[] = [];
+    try {
+      entries = await readdir(dir);
+    } catch {
+      entries = [];
     }
-  };
+    const iterations = entries
+      .map((f) => /^(\d+)\.json$/.exec(f))
+      .filter((m): m is RegExpExecArray => m !== null)
+      .map((m) => Number(m[1]));
+    const currentMax = iterations.length > 0 ? Math.max(...iterations) : 0;
+    const nextIteration = currentMax + 1;
+    const maxIterations = ctx.config.orchestrator.replan.maxIterations;
+
+    if (nextIteration > maxIterations) {
+      return { payload: { escalate: true, iteration: nextIteration, capRemaining: 0 } };
+    }
+
+    const now = Date.now();
+    const newCards: TaskCard[] = (input.newTasks ?? []).map(
+      (task): TaskCard => ({
+        ...task,
+        status: "pending",
+        createdAt: now,
+        updatedAt: now
+      })
+    );
+
+    // Reject a replan that would introduce a cycle or a dangling dependency
+    // BEFORE persisting anything — mirrors plan_submit's validateDag gate.
+    // Validated against the full board (existing cards + this replan's new
+    // ones) so a newTasks entry can correctly reference an already-persisted
+    // older task.
+    if (newCards.length > 0) {
+      const dag = validateDag([...ctx.taskStore.list(), ...newCards]);
+      if (!dag.valid) {
+        return {
+          isError: true,
+          payload: { valid: false, cycles: dag.cycles, danglingDeps: dag.danglingDeps }
+        };
+      }
+    }
+
+    const record: ReplanRecord = {
+      iteration: nextIteration,
+      reason: input.reason,
+      affectedTaskIds: input.affectedTaskIds,
+      newTaskIds: newCards.map((c) => c.id),
+      at: now
+    };
+    // Write the replan record BEFORE applying its new task cards. If the
+    // process is killed between these two awaits, the surviving state is
+    // "iteration N is durably recorded but its cards weren't added" (safe:
+    // under-provisioned, and the cap accounting stays correct) rather than
+    // the reverse ("new pending cards are live/schedulable but no replan
+    // record exists for them", which would let the run silently exceed
+    // maxIterations worth of task-seeding).
+    await atomicWriteJson(join(dir, `${nextIteration}.json`), record);
+
+    if (newCards.length > 0) {
+      await ctx.taskStore.putMany(newCards);
+    }
+
+    await ctx.memory.appendEntry("decision-log", {
+      type: "replan",
+      iteration: nextIteration,
+      reason: input.reason,
+      affectedTaskIds: input.affectedTaskIds,
+      newTaskIds: record.newTaskIds
+    });
+
+    return {
+      payload: {
+        iteration: nextIteration,
+        capRemaining: maxIterations - nextIteration,
+        escalate: false,
+        newTaskIds: record.newTaskIds
+      }
+    };
+  });
 }

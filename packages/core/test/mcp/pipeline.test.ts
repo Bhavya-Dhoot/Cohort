@@ -312,6 +312,52 @@ describe("next_batch", () => {
 });
 
 // ---------------------------------------------------------------------------
+// spawn_worker: assigned-task orphan recovery
+// ---------------------------------------------------------------------------
+
+describe("spawn_worker orphan recovery", () => {
+  it("reverts a task to 'pending' when its individual spawn is budget-refused, so a later next_batch re-selects it", async () => {
+    const client = createMockClient({ getUsage: vi.fn(async () => ({ costUsd: 19.6 })) });
+    const { client: mcp, close } = await setupServer(client);
+    try {
+      await callTool(mcp, "plan_submit", {
+        objective: "build",
+        tasks: [{ id: "task-a", title: "A", prompt: "a", dependsOn: [], fileOwnership: ["a/**"] }]
+      });
+
+      // Push committed cost to just under the hard cap ($20, shipped default)
+      // with an unrelated worker, so the run's tier is 'soft' (not yet
+      // 'hard') -- next_batch's own upfront tier gate lets task-a through.
+      const expensive = await callTool(mcp, "spawn_worker", { taskId: "unrelated", prompt: "expensive" });
+      const expensiveWorkerId = expensive.data.workerId as string;
+      await waitForWorkerState(mcp, expensiveWorkerId, ["completed"]);
+      const statusAfterExpensive = await callTool(mcp, "worker_status", { workerId: expensiveWorkerId });
+      expect(statusAfterExpensive.data.budget.tier).not.toBe("hard");
+
+      const batchRes = await callTool(mcp, "next_batch", {});
+      expect(batchRes.data.tasks.map((t: { id: string }) => t.id)).toEqual(["task-a"]);
+      expect(batchRes.data.tasks[0].status).toBe("assigned");
+
+      // The per-task reserve() call for task-a tips committed+estimate over
+      // the hard cap and is refused, even though next_batch's own upfront
+      // check already let this batch through -- exactly the scenario where
+      // a task can be stranded 'assigned' with no worker ever spawned.
+      const spawnA = await callTool(mcp, "spawn_worker", { taskId: "task-a", prompt: "implement a" });
+      expect(spawnA.isError).toBe(true);
+      expect(String(spawnA.data.error)).toMatch(/[Bb]udget refused/);
+
+      // task-a must not be stranded 'assigned' forever: a later next_batch
+      // call re-selects it instead of it silently blocking forever.
+      const secondBatch = await callTool(mcp, "next_batch", {});
+      expect(secondBatch.data.tasks.map((t: { id: string }) => t.id)).toEqual(["task-a"]);
+      expect(secondBatch.data.tasks[0].status).toBe("assigned");
+    } finally {
+      await close();
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Full pipeline: plan -> batch -> 3 workers -> verify -> integrate -> status
 // ---------------------------------------------------------------------------
 
@@ -386,6 +432,183 @@ describe("full batch pipeline", () => {
 });
 
 // ---------------------------------------------------------------------------
+// integrate_batch: edge cases (detached HEAD, idempotency, zero-verified,
+// unknown regression suite, concurrent calls for the same batch)
+// ---------------------------------------------------------------------------
+
+/** Spawns a worker for `taskId`, commits a trivial change in its worktree, and verifies it. */
+async function spawnCommitVerify(mcp: Client, taskId: string): Promise<void> {
+  const spawned = await callTool(mcp, "spawn_worker", { taskId, prompt: `implement ${taskId}` });
+  expect(spawned.isError).toBeFalsy();
+  const workerId = spawned.data.workerId as string;
+  const worktreePath = spawned.data.worktreePath as string;
+  await waitForWorkerState(mcp, workerId, ["completed"]);
+
+  const owned = taskId.split("-")[1] ?? taskId;
+  const dir = join(worktreePath, owned);
+  await mkdir(dir, { recursive: true });
+  await writeFile(join(dir, "file.txt"), `output from ${taskId}\n`, "utf8");
+  await runGit(["add", "-A"], worktreePath);
+  await runGit(["commit", "-m", `${taskId} work`], worktreePath);
+
+  const verified = await callTool(mcp, "verify_worker", { workerId, command: `node -e "process.exit(0)"` });
+  expect(verified.data.state).toBe("verified");
+}
+
+describe("integrate_batch edge cases", () => {
+  it("refuses with isError on a detached-HEAD projectDir, without ever writing batch status 'integrating'", async () => {
+    const { client: mcp, close } = await setupServer(createMockClient());
+    try {
+      await callTool(mcp, "plan_submit", {
+        objective: "build",
+        tasks: [{ id: "task-a", title: "A", prompt: "a", dependsOn: [], fileOwnership: ["a/**"] }]
+      });
+      const batchRes = await callTool(mcp, "next_batch", {});
+      const batchId = batchRes.data.batchId as string;
+      await spawnCommitVerify(mcp, "task-a");
+
+      const { stdout: sha } = await runGit(["rev-parse", "HEAD"], projectDir);
+      await runGit(["checkout", "--detach", sha.trim()], projectDir);
+
+      const integrated = await callTool(mcp, "integrate_batch", { batchId });
+      expect(integrated.isError).toBe(true);
+      expect(String(integrated.data.error)).toMatch(/detached HEAD/);
+
+      // Never got past the fail-fast base-ref check, so status is untouched.
+      const status = await callTool(mcp, "batch_status", { batchId });
+      expect(status.data.status).toBe("selected");
+    } finally {
+      await runGit(["checkout", "main"], projectDir).catch(() => undefined);
+      await close();
+    }
+  });
+
+  it("is idempotent: a second call on an already-integrated batch returns cleanly without re-merging", async () => {
+    await writeTrivialSuiteOverride(projectDir);
+    const { client: mcp, close } = await setupServer(createMockClient());
+    try {
+      await callTool(mcp, "plan_submit", {
+        objective: "build",
+        tasks: [{ id: "task-a", title: "A", prompt: "a", dependsOn: [], fileOwnership: ["a/**"] }]
+      });
+      const batchRes = await callTool(mcp, "next_batch", {});
+      const batchId = batchRes.data.batchId as string;
+      await spawnCommitVerify(mcp, "task-a");
+
+      const first = await callTool(mcp, "integrate_batch", { batchId, regressionSuite: "trivial" });
+      expect(first.isError).toBeFalsy();
+      expect(first.data.merges).toHaveLength(1);
+
+      const second = await callTool(mcp, "integrate_batch", { batchId, regressionSuite: "trivial" });
+      expect(second.isError).toBeFalsy();
+      expect(second.data.merges).toEqual([]);
+      expect(String(second.data.note)).toMatch(/already integrated/);
+      expect(second.data.integrationBranch).toBe(first.data.integrationBranch);
+
+      const status = await callTool(mcp, "batch_status", { batchId });
+      expect(status.data.status).toBe("integrated");
+    } finally {
+      await close();
+    }
+  }, 15000);
+
+  it("a batch with zero verified workers reports cleanly and never touches projectDir's checkout", async () => {
+    const { client: mcp, close } = await setupServer(createMockClient());
+    try {
+      await callTool(mcp, "plan_submit", {
+        objective: "build",
+        tasks: [{ id: "task-a", title: "A", prompt: "a", dependsOn: [], fileOwnership: ["a/**"] }]
+      });
+      const batchRes = await callTool(mcp, "next_batch", {});
+      const batchId = batchRes.data.batchId as string;
+
+      // Spawn but never verify -- worker stays 'completed', never 'verified'.
+      const spawned = await callTool(mcp, "spawn_worker", { taskId: "task-a", prompt: "implement a" });
+      await waitForWorkerState(mcp, spawned.data.workerId, ["completed"]);
+
+      const integrated = await callTool(mcp, "integrate_batch", { batchId });
+      expect(integrated.isError).toBeFalsy();
+      expect(integrated.data.merges).toEqual([]);
+      expect(integrated.data.notVerified).toEqual(["task-a"]);
+      expect(integrated.data.allMerged).toBe(false);
+      expect(integrated.data.allPassed).toBe(false);
+      expect(String(integrated.data.note)).toMatch(/nothing to integrate/);
+
+      const status = await callTool(mcp, "batch_status", { batchId });
+      expect(status.data.status).toBe("failed");
+      expect(status.data.integrationBranch).toBeUndefined();
+
+      // No switch/worktree/merge was ever attempted against projectDir.
+      const { stdout: branch } = await runGit(["rev-parse", "--abbrev-ref", "HEAD"], projectDir);
+      expect(branch.trim()).toBe("main");
+    } finally {
+      await close();
+    }
+  });
+
+  it("an unknown regressionSuite fails fast before any merge or task-status mutation", async () => {
+    const { client: mcp, close } = await setupServer(createMockClient());
+    try {
+      await callTool(mcp, "plan_submit", {
+        objective: "build",
+        tasks: [{ id: "task-a", title: "A", prompt: "a", dependsOn: [], fileOwnership: ["a/**"] }]
+      });
+      const batchRes = await callTool(mcp, "next_batch", {});
+      const batchId = batchRes.data.batchId as string;
+      await spawnCommitVerify(mcp, "task-a");
+
+      const integrated = await callTool(mcp, "integrate_batch", { batchId, regressionSuite: "does-not-exist" });
+      expect(integrated.isError).toBe(true);
+      expect(String(integrated.data.error)).toMatch(/Unknown check suite/);
+
+      // Nothing was mutated: batch is still 'selected', task-a is still
+      // 'assigned' (never flipped to 'done'), no merge was attempted.
+      const status = await callTool(mcp, "batch_status", { batchId });
+      expect(status.data.status).toBe("selected");
+      expect(status.data.tasks[0].taskState).toBe("assigned");
+
+      const { stdout: branch } = await runGit(["rev-parse", "--abbrev-ref", "HEAD"], projectDir);
+      expect(branch.trim()).toBe("main");
+    } finally {
+      await close();
+    }
+  });
+
+  it("serializes two concurrent integrate_batch calls for the same batch: exactly one performs the real merge", async () => {
+    await writeTrivialSuiteOverride(projectDir);
+    const { client: mcp, close } = await setupServer(createMockClient());
+    try {
+      await callTool(mcp, "plan_submit", {
+        objective: "build",
+        tasks: [{ id: "task-a", title: "A", prompt: "a", dependsOn: [], fileOwnership: ["a/**"] }]
+      });
+      const batchRes = await callTool(mcp, "next_batch", {});
+      const batchId = batchRes.data.batchId as string;
+      await spawnCommitVerify(mcp, "task-a");
+
+      const [a, b] = await Promise.all([
+        callTool(mcp, "integrate_batch", { batchId, regressionSuite: "trivial" }),
+        callTool(mcp, "integrate_batch", { batchId, regressionSuite: "trivial" })
+      ]);
+
+      expect(a.isError).toBeFalsy();
+      expect(b.isError).toBeFalsy();
+      const merged = [a, b].filter((r) => r.data.merges.length === 1);
+      const shortCircuited = [a, b].filter((r) => r.data.merges.length === 0);
+      expect(merged).toHaveLength(1);
+      expect(shortCircuited).toHaveLength(1);
+      expect(String(shortCircuited[0]!.data.note)).toMatch(/already integrated/);
+
+      const status = await callTool(mcp, "batch_status", { batchId });
+      expect(status.data.status).toBe("integrated");
+      expect(status.data.tasks[0].taskState).toBe("done");
+    } finally {
+      await close();
+    }
+  }, 15000);
+});
+
+// ---------------------------------------------------------------------------
 // run_check_suite
 // ---------------------------------------------------------------------------
 
@@ -429,6 +652,95 @@ describe("replan_record", () => {
 
       const runId = await readRunId(projectDir);
       expect(await pathExists(join(projectDir, ".agentic-os", "runs", runId, "replans", "3.json"))).toBe(false);
+      expect(await pathExists(join(projectDir, ".agentic-os", "runs", runId, "replans", "2.json"))).toBe(true);
+    } finally {
+      await close();
+    }
+  });
+
+  it("newTasks are validated and persisted, with the replan record written for them", async () => {
+    const { client: mcp, close } = await setupServer(createMockClient());
+    try {
+      const res = await callTool(mcp, "replan_record", {
+        reason: "add follow-up work",
+        affectedTaskIds: ["task-a"],
+        newTasks: [{ id: "task-new", title: "New", prompt: "new", dependsOn: [], fileOwnership: ["new/**"] }]
+      });
+      expect(res.isError).toBeFalsy();
+      expect(res.data.newTaskIds).toEqual(["task-new"]);
+
+      const runId = await readRunId(projectDir);
+      const record = JSON.parse(
+        await readFile(join(projectDir, ".agentic-os", "runs", runId, "replans", "1.json"), "utf8")
+      );
+      expect(record.newTaskIds).toEqual(["task-new"]);
+
+      const board = JSON.parse(
+        await readFile(join(projectDir, ".agentic-os", "runs", runId, "task-board.json"), "utf8")
+      );
+      expect(board.tasks.map((t: { id: string }) => t.id)).toContain("task-new");
+      expect(board.tasks.find((t: { id: string }) => t.id === "task-new").status).toBe("pending");
+    } finally {
+      await close();
+    }
+  });
+
+  it("rejects newTasks that would introduce a dependency cycle, persisting nothing", async () => {
+    const { client: mcp, close } = await setupServer(createMockClient());
+    try {
+      const res = await callTool(mcp, "replan_record", {
+        reason: "bad replan",
+        affectedTaskIds: ["task-x"],
+        newTasks: [
+          { id: "task-x2", title: "X2", prompt: "x2", dependsOn: ["task-x3"], fileOwnership: ["x2/**"] },
+          { id: "task-x3", title: "X3", prompt: "x3", dependsOn: ["task-x2"], fileOwnership: ["x3/**"] }
+        ]
+      });
+      expect(res.isError).toBe(true);
+      expect(res.data.valid).toBe(false);
+      expect(res.data.cycles.length).toBeGreaterThan(0);
+
+      const runId = await readRunId(projectDir);
+      expect(await pathExists(join(projectDir, ".agentic-os", "runs", runId, "replans", "1.json"))).toBe(false);
+      expect(await pathExists(join(projectDir, ".agentic-os", "runs", runId, "task-board.json"))).toBe(false);
+    } finally {
+      await close();
+    }
+  });
+
+  it("rejects newTasks with a dangling dependency, persisting nothing", async () => {
+    const { client: mcp, close } = await setupServer(createMockClient());
+    try {
+      const res = await callTool(mcp, "replan_record", {
+        reason: "bad replan",
+        affectedTaskIds: ["task-x"],
+        newTasks: [
+          { id: "task-x4", title: "X4", prompt: "x4", dependsOn: ["task-missing"], fileOwnership: ["x4/**"] }
+        ]
+      });
+      expect(res.isError).toBe(true);
+      expect(res.data.valid).toBe(false);
+      expect(res.data.danglingDeps.length).toBeGreaterThan(0);
+    } finally {
+      await close();
+    }
+  });
+
+  it("serializes concurrent replan_record calls into distinct, non-colliding iterations", async () => {
+    const { client: mcp, close } = await setupServer(createMockClient());
+    try {
+      const [a, b] = await Promise.all([
+        callTool(mcp, "replan_record", { reason: "a", affectedTaskIds: ["task-a"] }),
+        callTool(mcp, "replan_record", { reason: "b", affectedTaskIds: ["task-a"] })
+      ]);
+      expect(a.isError).toBeFalsy();
+      expect(b.isError).toBeFalsy();
+
+      const iterations = [a.data.iteration, b.data.iteration].sort((x, y) => x - y);
+      expect(iterations).toEqual([1, 2]);
+
+      const runId = await readRunId(projectDir);
+      expect(await pathExists(join(projectDir, ".agentic-os", "runs", runId, "replans", "1.json"))).toBe(true);
       expect(await pathExists(join(projectDir, ".agentic-os", "runs", runId, "replans", "2.json"))).toBe(true);
     } finally {
       await close();
