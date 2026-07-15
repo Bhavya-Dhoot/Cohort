@@ -1,0 +1,13 @@
+{
+  "name": "agentic-os",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "build": "tsc -b packages/core",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit -p packages/core"
+  }
+}
