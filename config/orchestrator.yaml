@@ -1,0 +1,24 @@
+# Orchestrator run-level defaults: budget guardrails, replan cap, human
+# gates, and worker pool sizing. Overridable per-project in
+# <project>\.agentic-os\config\orchestrator.yaml.
+
+budget:
+  softCapUsd: 5
+  hardCapUsd: 20
+
+replan:
+  maxIterations: 2
+
+humanGates:
+  planApproval: true
+  preMerge: true
+
+worker:
+  maxConcurrent: 3
+  timeoutMinutes: 30
+  infraRetryMax: 3
+
+worktree:
+  # null = sibling of the project directory:
+  # ..\<project>-agentic-worktrees\<runId>\<workerId>
+  baseDir: null

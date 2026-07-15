@@ -1,0 +1,15 @@
+# Model routing: maps a task card's taskType to a "provider/model" string.
+# resolveModelRoute(taskType) looks up routing[taskType], falling back to
+# routing.default when taskType is unset or unknown. No provider names
+# appear in code — only here.
+
+routing:
+  default: "anthropic/claude-sonnet-5"
+  implementation: "opencode/grok-code"
+  search: "anthropic/claude-haiku"
+
+# Key into this file that budget/ swaps in once the soft cap is hit.
+downgrade_on_soft_cap: "small_model"
+
+# The cheaper model referenced by downgrade_on_soft_cap.
+small_model: "anthropic/claude-haiku"

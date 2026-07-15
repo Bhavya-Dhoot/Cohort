@@ -1,0 +1,17 @@
+# Specialist archetypes and the safety floor applied to every generated
+# OpenCode agent. default_permission.deny holds regardless of per-project
+# overrides — it is a floor, not a default that can be relaxed away.
+
+archetypes: []
+
+default_permission:
+  deny:
+    - "git push*"
+    - "npm publish*"
+    - "vercel deploy*"
+    - "netlify deploy*"
+    - "docker push*"
+    - "kubectl apply*"
+    - "terraform apply*"
+
+max_concurrent_specialists: 5

@@ -1,0 +1,8 @@
+# Provider definitions. Only environment variable *names* are stored here,
+# never literal API keys.
+
+providers:
+  anthropic:
+    apiKeyEnv: ANTHROPIC_API_KEY
+
+opencode_binary_path: "opencode"

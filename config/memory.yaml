@@ -1,0 +1,14 @@
+# Shared project memory: how decisions/contracts/facts are stored, how long
+# they're retained, and how much context one phase-to-phase handoff may
+# carry.
+
+store: jsonl
+
+retention:
+  decisions: project
+
+maxContextTokensPerHandoff: 8000
+
+# Model used to summarize context for handoffs; null = pass the
+# (already-bounded) context through unsummarized.
+summarizationModel: null
