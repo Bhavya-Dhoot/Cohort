@@ -2,14 +2,18 @@
 # resolveModelRoute(taskType) looks up routing[taskType], falling back to
 # routing.default when taskType is unset or unknown. No provider names
 # appear in code — only here.
+#
+# Defaults target GitHub Copilot because it is the only provider currently
+# authenticated in this machine's opencode install (verified 2026-07-15 via
+# `opencode auth list`; `github-copilot/gpt-4.1` proven working by the E2E
+# smoke). After `opencode auth login` for another provider, override these
+# per project in <project>/.agentic-os/config/models.yaml or edit here.
 
 routing:
-  default: "anthropic/claude-sonnet-5"
-  implementation: "opencode/grok-code"
-  search: "anthropic/claude-haiku"
+  default: "github-copilot/gpt-4.1"
 
 # Key into this file that budget/ swaps in once the soft cap is hit.
 downgrade_on_soft_cap: "small_model"
 
 # The cheaper model referenced by downgrade_on_soft_cap.
-small_model: "anthropic/claude-haiku"
+small_model: "github-copilot/gpt-4.1"

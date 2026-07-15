@@ -1,0 +1,5 @@
+{
+  "name": "agentic-os",
+  "version": "0.1.0",
+  "description": "Spawn and manage OpenCode implementation workers in isolated git worktrees from Claude Code"
+}

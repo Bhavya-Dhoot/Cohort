@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "agentic-os": {
+      "command": "node",
+      "args": ["${CLAUDE_PLUGIN_ROOT}/../core/dist/mcp/bin.js"],
+      "env": {
+        "AGENTIC_CONFIG_DIR": "${CLAUDE_PLUGIN_ROOT}/../../config"
+      }
+    }
+  }
+}
