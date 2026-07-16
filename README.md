@@ -53,7 +53,7 @@ spawns, and you approve the integration diff before it merges.
 ## How it works
 
 <p align="center">
-  <img src="docs/assets/loop.svg" alt="The Cohort loop: analyze, plan, generate org and specialists, batch spawn, verify, review, integrate, replan, then repeat" width="380" />
+  <img src="docs/assets/loop.svg" alt="The Cohort loop: analyze, plan, generate org and specialists, batch spawn, verify, review, integrate, replan, then repeat" width="520" />
 </p>
 
 1. **Analyze** the objective into a brief.
