@@ -13,6 +13,8 @@ packages/cli/vendor/
 .env.*
 *.pem
 *.key
+.npmrc
+
 # build/editor cruft
 *.tsbuildinfo
 .opencode/
