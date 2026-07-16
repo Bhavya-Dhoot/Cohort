@@ -12,6 +12,7 @@
     "smoke": "node scripts/smoke.mjs",
     "m2-accept": "node scripts/m2-accept.mjs",
     "m3-accept": "node scripts/m3-accept.mjs",
-    "m4-accept": "node scripts/m4-accept.mjs"
+    "m4-accept": "node scripts/m4-accept.mjs",
+    "demo-run": "node scripts/demo-run.mjs"
   }
 }
