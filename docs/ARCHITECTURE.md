@@ -14,18 +14,48 @@ CLI provides the implementation workers — short-lived agents, each spawned
 into its own git worktree, each held to a contract, each independently
 verified before its work is trusted.
 
-Milestone 1's concrete goal is narrower than the full platform: give Claude
-Code the ability to spawn OpenCode agents and use them properly — spawn,
-monitor, verify, merge — as MCP tools backed by a durable, disk-resident
-core library.
+Milestone 1's concrete goal was narrower than the full platform: give
+Claude Code the ability to spawn OpenCode agents and use them properly —
+spawn, monitor, verify, merge — as MCP tools backed by a durable,
+disk-resident core library.
+
+**The platform is now complete through M4.** The full loop runs end to
+end: analyze → generate org/domains → generate specialists → dispatch
+DAG-ordered batches of OpenCode workers → independently verify → collect
+reviewer verdicts → integrate → run regression → replan → report. Judgment
+(what to build, who reviews it, when to stop) stays in Claude Code, the
+`agentic-os` skill; the core library and its 18 MCP tools are mechanics
+only — persistence, process control, verification, guardrails.
 
 **Form factor.** The core engine ships as a standalone TypeScript library
 plus a local stdio MCP server, packaged as a Claude Code plugin (skills are
 the UX layer). A standalone daemon reusing the same core via the Claude
-Agent SDK is a later milestone (M4).
+Agent SDK was considered for M4 and deliberately deferred — the plugin
+form factor already satisfies "Claude as CEO"; the core library boundary
+keeps a daemon addable later without rework.
 
 **Autonomy default.** Human gates sit at plan-approval and pre-merge, plus
 a hard per-run budget ceiling. Everything between gates runs unattended.
+
+### Milestones
+
+- **M1 — Worker layer.** Spawn/monitor/verify/merge a single OpenCode
+  worker in an isolated git worktree, as 8 MCP tools over a disk-resident
+  core.
+- **M2 — Multi-worker pipeline.** Task DAG + file-ownership-disjoint
+  batches, shared memory, config-defined check suites, a DAG-ordered
+  integration branch, capped replan.
+- **M3 — Dynamic org, specialists & reviewers.** A generated org
+  chart/domains per objective, on-demand `.opencode/agent/*.md`
+  specialists, read-only reviewer subagents whose verdicts gate
+  integration.
+- **M4 — Observability & extensibility.** `run_report`'s markdown+mermaid
+  run report; five extension points proven to work with zero
+  `packages/core/src` edits.
+
+Each milestone closed with an adversarial multi-agent review, a real-token
+acceptance run at $0 (auto-selected free OpenCode models), and a gate
+artifact (`gates/gate-{1..4}-*.md`).
 
 ## Design principles
 
@@ -87,17 +117,24 @@ first built; several grow further capability in later milestones.
 | Module | Responsibility | Milestone |
 |---|---|---|
 | `config/` | YAML load + validate (zod), env interpolation, `resolveModelRoute(taskType)` | M1 |
-| `worktree/` | git worktree create/list/remove via `child_process`, Windows-safe | M1 |
+| `worktree/` | git worktree create/list/remove via `child_process`, Windows-safe; `integration.ts` adds the DAG-ordered merge to a per-run integration branch | M1/M2 |
 | `opencode-client/` | Typed wrapper over the `opencode serve` HTTP API; spawns `serve` detached | M1 |
 | `worker/` | Worker state machine, infra/logic failure classification, retry policy — client injected/mockable | M1 |
 | `events/` | Append-only JSONL event log per run/worker, `append`/`tail` | M1 |
-| `tasks/` | Task record store (M1) → DAG + file-ownership batch selection (M2) | M1/M2 |
+| `tasks/` | Task record store (M1) → `validateDag`/`selectBatch` for DAG-ready, file-ownership-disjoint batches (M2) | M1/M2 |
 | `budget/` | Cost accumulation, pre-spawn reservation, tiered guardrails | M1 |
 | `verify/` | Independent verification runner (shell commands in worktree) → cross-model review (M3) | M1 |
-| `mcp/` | Stdio MCP server wiring the 8-tool surface | M1 |
-| `memory/` | Shared project memory: decisions, contracts, facts, context bundles per handoff | M2 |
-| `specialist/` | Generate/retire `.opencode/agent/*.md` from plan roles | M3 |
-| `plugin/` | Extension points: custom verifiers, archetypes, providers | M4 |
+| `checks/` | Named, config-defined multi-command check suites (`runCheckSuite`) — the only source of truth for pass/fail | M2 |
+| `plan/` | Plan/contract/replan/batch schemas, plus the org-chart schema (`domains`/`orgChart`) | M2/M3 |
+| `memory/` | Shared project memory: snapshot + append-only sections, token-capped context bundles per handoff | M2 |
+| `specialist/` | Generate/retire `.opencode/agent/*.md` from plan roles, deny-floor permission always merged in | M3 |
+| `review/` | Reviewer verdict store; rejects a non-`pass` verdict with no findings (anti-rubber-stamp) | M3 |
+| `report/` | `generateRunReport` — one markdown+mermaid observability doc (timeline, task DAG, cost, failures) | M4 |
+| `mcp/` | Stdio MCP server wiring the 18-tool surface | M1 |
+
+Extensibility (custom checks, memory sections, reviewers, worker backends,
+providers) resolves through config / markdown agent files / a DI
+interface, not a dedicated module — see **Extensibility** below.
 
 ## Component diagram
 
@@ -107,7 +144,7 @@ flowchart TB
         Skill["/agentic-os skill (UX layer)"]
     end
     subgraph MCPServer["MCP stdio server (packages/core/src/mcp)"]
-        Tools["8 MCP tools"]
+        Tools["18 MCP tools"]
         Worker["worker/ state machine"]
         Budget["budget/ guardrails"]
         Verify["verify/ runner"]
@@ -255,7 +292,13 @@ flowchart TD
   directly. Full discovery notes:
   `packages/core/src/opencode-client/docs-notes.md`.
 
-## MCP tool surface (M1, 8 tools)
+## MCP tool surface (18 tools)
+
+The 8 M1 tools drive a single worker's lifecycle. M2 added 6 pipeline
+tools plus `memory`; M3 added `specialist` and `review_verdict`; M4 added
+`run_report` — 10 tools total on top of M1.
+
+### Worker lifecycle (M1)
 
 | Tool | Signature | Purpose |
 |---|---|---|
@@ -268,13 +311,34 @@ flowchart TD
 | `verify_worker` | `(workerId, command?) -> {passed, exitCode, output}` | Run independent verification against the worker's worktree |
 | `finalize_worker` | `(workerId, action:"merge"\|"discard", targetBranch?) -> {result, conflict?}` | Merge verified work or discard it |
 
+### Pipeline (M2)
+
+| Tool | Signature | Purpose |
+|---|---|---|
+| `plan_submit` | `(objective, tasks[], contracts?, domains?, orgChart?) -> {planId, taskCount, valid, cycles, danglingDeps}` | Validate (cycles / dangling deps / org-refs) and persist a DAG task plan; seeds the task board + task-graph memory |
+| `next_batch` | `(maxWorkers?) -> {batchId, tasks[], blocked, budget?}` | Select the next DAG-ready, file-ownership-disjoint batch of pending tasks; caller still spawns one worker per task |
+| `batch_status` | `(batchId) -> {tasks:[{taskId, status, workerId?, state?}]}` | Read-only poll of a batch's task/worker states |
+| `integrate_batch` | `(batchId, regressionSuite?) -> {merged, notVerified, regression?}` | Merge every verified batch task onto the run's integration branch in DAG order, then run an optional regression suite |
+| `run_check_suite` | `(workerId? \| path?, suiteName) -> CheckSuiteResult` | Run a named, config-defined check suite; the only source of truth for pass/fail, independent of worker self-report |
+| `replan_record` | `(reason, affectedTaskIds, newTasks?) -> {iteration, escalate, capRemaining}` | Log a replan iteration against `orchestrator.replan.maxIterations`; `escalate:true` is a hard stop requiring a human |
+
+### Memory, specialists, review, reporting (M2–M4)
+
+| Tool | Signature | Purpose |
+|---|---|---|
+| `memory` | `(action: read\|write\|append\|bundle, section?, content?, entry?, sections?, maxTokens?) -> varies` | Read/write/append/bundle shared cross-run project memory |
+| `specialist` | `(action: generate\|retire\|list, agentId?, role?, description?, systemPrompt?, ...) -> varies` | Generate/retire/list `.opencode/agent/*.md` specialists; capped by `max_concurrent_specialists`, deny-floor always merged in |
+| `review_verdict` | `(action: record\|get, taskId, reviewerId?, verdict?, findings?, summary?) -> varies` | Record or read a reviewer's verdict; non-`pass` requires findings; `get` rolls every reviewer up into one blocking summary |
+| `run_report` | `() -> {summary, reportPath, markdown}` | Generate and persist the run's markdown+mermaid observability report (timeline, task DAG, cost, failures) |
+
 ## Directory layouts
 
 **Platform repo** (`F:\Agentic_os\`):
 
 ```
 packages/core/src/{config,worktree,opencode-client,worker,events,tasks,
-                    budget,verify,mcp,memory,specialist,plugin}/
+                    budget,verify,checks,plan,memory,specialist,review,
+                    report,mcp}/
 packages/core/test/
 packages/plugin/{.claude-plugin/plugin.json, .mcp.json, skills/, agents/,
                   monitors/monitors.json, bin/}
@@ -337,6 +401,22 @@ project in `<project>\.agentic-os\config\`:
   humanGates: { planApproval: true, preMerge: true }
   worker: { maxConcurrent: 4, timeoutMinutes: 30, infraRetryMax: 3 }
   ```
+
+## Extensibility
+
+Five extension points let a project or third party change platform
+behavior without editing `packages/core/src`: custom check suites, custom
+memory sections, custom reviewers, alternate worker backends, and new
+providers. Each resolves to one of three closed, inspectable shapes:
+project config (YAML, deep-merged over the shipped defaults), a markdown
+agent definition (`.opencode/agent/*.md`), or a TypeScript interface
+satisfied at construction (`createAgenticMcpServer({ deps })`). See
+`docs/EXTENDING.md` for the mechanism and a worked example per point.
+
+**Non-goal:** no dynamic loading of arbitrary user JavaScript. No
+extension point evaluates a project-supplied script or module at runtime —
+config and markdown are auditable without executing them, and the DI
+interface is type-checked at the call site.
 
 ## Adopted prior-art patterns
 
