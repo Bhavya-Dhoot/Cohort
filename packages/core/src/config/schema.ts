@@ -2,7 +2,7 @@ import { z } from "zod";
 
 /**
  * Zod schemas for the five shipped config files under `config/` (and their
- * per-project overrides under `<project>/.agentic-os/config/`). Each schema
+ * per-project overrides under `<project>/.cohort/config/`). Each schema
  * validates one YAML file after defaults+override merge and `${VAR}` env
  * interpolation — see `./index.ts` for the loader that drives them.
  */

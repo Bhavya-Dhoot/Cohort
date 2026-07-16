@@ -13,7 +13,7 @@ import type { OpencodeClient, PromptResult } from "../../src/opencode-client/typ
 import type { FetchFn } from "../../src/opencode-client/http.js";
 
 /**
- * Proves Agentic OS capability 15 -- "extend without changing core source"
+ * Proves Cohort capability 15 -- "extend without changing core source"
  * -- for the five extension seams `mcp/server.ts` and `config/schema.ts`
  * expose: custom check suites, custom memory sections, arbitrary reviewer
  * ids, a swappable worker backend (the `OpencodeClient` DI seam), and new
@@ -36,7 +36,7 @@ let root: string;
 let projectDir: string;
 
 beforeEach(async () => {
-  root = join(tmpdir(), `agentic-os-extension-test-${randomBytes(6).toString("hex")}`);
+  root = join(tmpdir(), `cohort-extension-test-${randomBytes(6).toString("hex")}`);
   projectDir = join(root, "repo");
   await mkdir(projectDir, { recursive: true });
 
@@ -190,9 +190,9 @@ async function waitForWorkerState(
   }
 }
 
-/** Writes `<forProjectDir>/.agentic-os/config/<fileName>` -- the override dir `createAgenticMcpServer` already loads. */
+/** Writes `<forProjectDir>/.cohort/config/<fileName>` -- the override dir `createAgenticMcpServer` already loads. */
 async function writeConfigOverride(forProjectDir: string, fileName: string, yaml: string): Promise<void> {
-  const dir = join(forProjectDir, ".agentic-os", "config");
+  const dir = join(forProjectDir, ".cohort", "config");
   await mkdir(dir, { recursive: true });
   await writeFile(join(dir, fileName), yaml, "utf8");
 }
@@ -377,7 +377,7 @@ describe("extension point: new provider via providers.yaml", () => {
     // real opencode-client implementation, not by any MCP tool handler), so
     // the real module under test is config/index.ts's loader itself --
     // the exact loader createAgenticMcpServer calls internally.
-    const overridesDir = join(projectDir, ".agentic-os", "config");
+    const overridesDir = join(projectDir, ".cohort", "config");
     const config = await loadConfig(PLATFORM_CONFIG_DIR, overridesDir);
     expect(config.providers.providers.myllm).toEqual({ apiKeyEnv: "MYLLM_KEY" });
     // deepMerge is additive over the shipped base, not a replace -- proof

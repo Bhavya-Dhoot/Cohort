@@ -14,7 +14,7 @@ const BASE = 1_700_000_000_000;
 let root: string;
 
 beforeEach(async () => {
-  root = join(tmpdir(), `agentic-os-report-test-${randomBytes(6).toString("hex")}`);
+  root = join(tmpdir(), `cohort-report-test-${randomBytes(6).toString("hex")}`);
   await mkdir(root, { recursive: true });
 });
 

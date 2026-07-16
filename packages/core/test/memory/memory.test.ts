@@ -8,7 +8,7 @@ import { openMemoryStore } from "../../src/memory/index.js";
 let dir: string;
 
 beforeEach(() => {
-  dir = join(tmpdir(), `agentic-os-memory-test-${randomBytes(6).toString("hex")}`);
+  dir = join(tmpdir(), `cohort-memory-test-${randomBytes(6).toString("hex")}`);
 });
 
 afterEach(async () => {

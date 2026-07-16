@@ -1,5 +1,5 @@
 /**
- * Entry point for the Agentic OS MCP stdio server, invoked as `node bin.js`
+ * Entry point for the Cohort MCP stdio server, invoked as `node bin.js`
  * by a Claude Code plugin's `.mcp.json` (no shebang needed — it's never
  * executed directly). Thin by design: resolve config from env/cwd, build
  * the server, connect stdio, keep the process alive until SIGINT/SIGTERM.
@@ -34,10 +34,10 @@ async function main(): Promise<void> {
   const shutdown = (signal: string): void => {
     if (closing) return;
     closing = true;
-    process.stderr.write(`[agentic-os-mcp] received ${signal}, shutting down\n`);
+    process.stderr.write(`[cohort-mcp] received ${signal}, shutting down\n`);
     close()
       .catch((err: unknown) => {
-        process.stderr.write(`[agentic-os-mcp] error during shutdown: ${errMessage(err)}\n`);
+        process.stderr.write(`[cohort-mcp] error during shutdown: ${errMessage(err)}\n`);
       })
       .finally(() => process.exit(0));
   };
@@ -51,6 +51,6 @@ function errMessage(err: unknown): string {
 }
 
 main().catch((err: unknown) => {
-  process.stderr.write(`[agentic-os-mcp] fatal: ${errMessage(err)}\n`);
+  process.stderr.write(`[cohort-mcp] fatal: ${errMessage(err)}\n`);
   process.exit(1);
 });

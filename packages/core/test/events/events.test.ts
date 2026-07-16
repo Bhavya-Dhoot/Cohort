@@ -19,7 +19,7 @@ let dir: string;
 let filePath: string;
 
 beforeEach(() => {
-  dir = join(tmpdir(), `agentic-os-events-test-${randomBytes(6).toString("hex")}`);
+  dir = join(tmpdir(), `cohort-events-test-${randomBytes(6).toString("hex")}`);
   filePath = join(dir, "events.jsonl");
 });
 

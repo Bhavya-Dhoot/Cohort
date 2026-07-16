@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * scripts/smoke.mjs — full-stack E2E smoke test for Agentic OS.
+ * scripts/smoke.mjs — full-stack E2E smoke test for Cohort.
  *
  * Builds packages/core, spins up a throwaway scratch git repo, drives the
  * REAL MCP tool surface (spawn_worker -> worker_status/stream_worker_log
@@ -26,9 +26,9 @@
  *   - createAgenticMcpServer is NOT re-exported from dist/index.js (only
  *     the library modules are); it's imported from dist/mcp/server.js.
  *   - `opencode serve`'s server.json/log file live under
- *     <projectDir>/.agentic-os/runs/<runId>/{server.json,opencode-serve.log}
+ *     <projectDir>/.cohort/runs/<runId>/{server.json,opencode-serve.log}
  *     (ensureServer is called with stateDir = the run dir), not directly
- *     under <projectDir>/.agentic-os/.
+ *     under <projectDir>/.cohort/.
  *   - Worktrees live at <projectDir>/../<projectDirName>-agentic-worktrees.
  */
 
@@ -52,7 +52,7 @@ const SCRATCH_BASE_DIR = process.env.SMOKE_SCRATCH_DIR ?? path.join(os.tmpdir(),
 
 const POLL_MS = 5000;
 const MAX_WAIT_MS = 10 * 60 * 1000;
-const HELLO_CONTENT = "hello from agentic-os";
+const HELLO_CONTENT = "hello from cohort";
 const PROMPT =
   `Create a file named hello.txt containing exactly: ${HELLO_CONTENT}\n` +
   `Do nothing else. Do not run tests, do not commit.`;
@@ -83,7 +83,7 @@ function run(cmd, args, cwd, opts = {}) {
   const { allowFail, ...spawnOpts } = opts;
   // shell:false by default: git.exe/taskkill.exe are real executables, and
   // shell:true on Windows does NOT quote array args containing spaces
-  // (verified empirically -- it broke `git config user.name "Agentic OS
+  // (verified empirically -- it broke `git config user.name "Cohort
   // Smoke"` by leaving it unquoted for cmd.exe to re-split). Only npm
   // (an .cmd shim on Windows -- see opencode-client/binary.ts's docs-notes
   // for the same class of issue) needs shell:true, passed explicitly at
@@ -121,7 +121,7 @@ async function tailFile(filePath, maxChars = 4000) {
 }
 
 function runDirFor(repo, id) {
-  return path.join(repo, ".agentic-os", "runs", id);
+  return path.join(repo, ".cohort", "runs", id);
 }
 
 async function callTool(name, args) {
@@ -186,10 +186,10 @@ async function main() {
 
   log(`scratch repo: ${repoDir}`);
   git(["init", "-b", "main"], repoDir);
-  git(["config", "user.email", "smoke@agentic-os.local"], repoDir);
-  git(["config", "user.name", "Agentic OS Smoke"], repoDir);
+  git(["config", "user.email", "smoke@cohort.local"], repoDir);
+  git(["config", "user.name", "Cohort Smoke"], repoDir);
   git(["config", "core.autocrlf", "false"], repoDir);
-  await writeFile(path.join(repoDir, "README.md"), "# agentic-os smoke scratch repo\n", "utf8");
+  await writeFile(path.join(repoDir, "README.md"), "# cohort smoke scratch repo\n", "utf8");
   git(["add", "README.md"], repoDir);
   git(["commit", "-m", "initial commit"], repoDir);
 
@@ -197,7 +197,7 @@ async function main() {
   const { createAgenticMcpServer } = await import("../packages/core/dist/mcp/server.js");
   agenticServer = await createAgenticMcpServer({ projectDir: repoDir, platformConfigDir: PLATFORM_CONFIG_DIR });
 
-  runId = JSON.parse(await readFile(path.join(repoDir, ".agentic-os", "current-run.json"), "utf8")).runId;
+  runId = JSON.parse(await readFile(path.join(repoDir, ".cohort", "current-run.json"), "utf8")).runId;
   log(`runId: ${runId}`);
 
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();

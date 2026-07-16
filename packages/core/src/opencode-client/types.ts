@@ -12,7 +12,7 @@
  */
 
 export interface EnsureServerOptions {
-  /** Directory holding server.json (typically <project>/.agentic-os). */
+  /** Directory holding server.json (typically <project>/.cohort). */
   stateDir: string;
   /** Explicit port; defaults to an OS-assigned free port. */
   port?: number;

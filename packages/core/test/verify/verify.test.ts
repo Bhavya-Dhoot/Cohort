@@ -9,7 +9,7 @@ import { runVerification, type KillProcessTreeFn } from "../../src/verify/index.
 let dir: string;
 
 beforeEach(async () => {
-  dir = join(tmpdir(), `agentic-os-verify-test-${randomBytes(6).toString("hex")}`);
+  dir = join(tmpdir(), `cohort-verify-test-${randomBytes(6).toString("hex")}`);
   await mkdir(dir, { recursive: true });
 });
 

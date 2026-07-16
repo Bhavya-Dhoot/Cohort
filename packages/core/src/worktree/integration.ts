@@ -2,7 +2,7 @@ import { mergeBranch, type RunGitFn } from "./merge.js";
 import { runGit } from "./git.js";
 
 /**
- * Derives the per-run integration branch name: `agentic/integration/<runId>`.
+ * Derives the per-run integration branch name: `cohort/integration/<runId>`.
  * `runId` is sanitized to a valid git ref segment — any run of characters
  * that aren't `[A-Za-z0-9._-]` collapses to a single `-`, and leading/
  * trailing `-`/`.` are trimmed (git rejects refs starting with `.` or
@@ -14,7 +14,7 @@ export function integrationBranchName(runId: string): string {
   const sanitized = runId
     .replace(/[^A-Za-z0-9._-]+/g, "-")
     .replace(/^[-.]+|[-.]+$/g, "");
-  return `agentic/integration/${sanitized}`;
+  return `cohort/integration/${sanitized}`;
 }
 
 export interface EnsureIntegrationBranchOptions {

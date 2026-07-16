@@ -1,10 +1,10 @@
-# Extending Agentic OS
+# Extending Cohort
 
-Agentic OS is designed so that project-specific and third-party extensions
+Cohort is designed so that project-specific and third-party extensions
 never require editing `packages/core/src`. Every extension point resolves to
 one of three things:
 
-1. **Config** — a YAML file under `<projectDir>/.agentic-os/config/`,
+1. **Config** — a YAML file under `<projectDir>/.cohort/config/`,
    deep-merged over the shipped defaults in `config/` (`config/index.ts`'s
    `loadConfig`). Objects merge key-by-key; arrays and scalars replace.
 2. **A markdown agent definition** — an OpenCode agent file at
@@ -27,7 +27,7 @@ loader) to confirm the extension takes effect, with zero change to
 
 ## 1. Custom check suites
 
-**Mechanism:** `<projectDir>/.agentic-os/config/orchestrator.yaml`, key
+**Mechanism:** `<projectDir>/.cohort/config/orchestrator.yaml`, key
 `checks.suites` (`config/schema.ts`'s `OrchestratorFileSchema`). Consumed by
 `checks/runCheckSuite` and exposed via the `run_check_suite` tool
 (`mcp/server.ts`).
@@ -51,7 +51,7 @@ suite names to change which suite runs at which pipeline phase.
 
 ## 2. Custom memory sections
 
-**Mechanism:** `<projectDir>/.agentic-os/config/memory.yaml`, key `sections`
+**Mechanism:** `<projectDir>/.cohort/config/memory.yaml`, key `sections`
 (`config/schema.ts`'s `MemoryFileSchema`), threaded into
 `openMemoryStore(dir, { sections })` (`memory/index.ts`) and exposed via the
 `memory` tool.
@@ -123,7 +123,7 @@ session id and cost surface through the real tool calls.
 
 ## 5. New providers
 
-**Mechanism:** `<projectDir>/.agentic-os/config/providers.yaml`, key
+**Mechanism:** `<projectDir>/.cohort/config/providers.yaml`, key
 `providers` (`config/schema.ts`'s `ProvidersFileSchema` — each entry
 requires `apiKeyEnv`, the *name* of an env var, never a literal key; extra
 fields are allowed via `.catchall`).

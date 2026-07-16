@@ -25,7 +25,7 @@ let root: string;
 let projectDir: string;
 
 beforeEach(async () => {
-  root = join(tmpdir(), `agentic-os-run-report-test-${randomBytes(6).toString("hex")}`);
+  root = join(tmpdir(), `cohort-run-report-test-${randomBytes(6).toString("hex")}`);
   projectDir = join(root, "repo");
   await mkdir(projectDir, { recursive: true });
 
@@ -188,7 +188,7 @@ async function pathExists(path: string): Promise<boolean> {
 }
 
 async function readRunId(forProjectDir: string): Promise<string> {
-  const raw = await readFile(join(forProjectDir, ".agentic-os", "current-run.json"), "utf8");
+  const raw = await readFile(join(forProjectDir, ".cohort", "current-run.json"), "utf8");
   return (JSON.parse(raw) as { runId: string }).runId;
 }
 
@@ -232,7 +232,7 @@ describe("run_report", () => {
       expect(res.data.markdown).toMatch(/```mermaid/);
 
       const runId = await readRunId(projectDir);
-      const reportPath = join(projectDir, ".agentic-os", "runs", runId, "report.md");
+      const reportPath = join(projectDir, ".cohort", "runs", runId, "report.md");
       expect(res.data.reportPath).toBe(reportPath);
       expect(await pathExists(reportPath)).toBe(true);
 
@@ -249,7 +249,7 @@ describe("run_report", () => {
     const { client: mcp, close } = await setupServer(client);
     try {
       const runId = await readRunId(projectDir);
-      const runDir = join(projectDir, ".agentic-os", "runs", runId);
+      const runDir = join(projectDir, ".cohort", "runs", runId);
       await mkdir(runDir, { recursive: true });
       // A huge objective alone is enough to push the rendered report well past
       // the ~64KB inline cap, without spawning hundreds of real workers.
@@ -286,12 +286,12 @@ describe("run_report", () => {
 describe("memory sections config seam", () => {
   it("a project config declaring a custom memory section can read/write it via the memory tool, while an undeclared section still errors", async () => {
     // Drives the config override dir createAgenticMcpServer already loads
-    // (`<projectDir>/.agentic-os/config/memory.yaml`), matching how
+    // (`<projectDir>/.cohort/config/memory.yaml`), matching how
     // pipeline.test.ts's writeTrivialSuiteOverride exercises the same seam
     // for orchestrator.yaml.
-    await mkdir(join(projectDir, ".agentic-os", "config"), { recursive: true });
+    await mkdir(join(projectDir, ".cohort", "config"), { recursive: true });
     await writeFile(
-      join(projectDir, ".agentic-os", "config", "memory.yaml"),
+      join(projectDir, ".cohort", "config", "memory.yaml"),
       "sections:\n  - deployment-notes\n",
       "utf8"
     );

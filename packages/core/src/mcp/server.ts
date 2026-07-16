@@ -126,7 +126,7 @@ export interface CreateAgenticMcpServerDeps {
 }
 
 export interface CreateAgenticMcpServerOptions {
-  /** The target project's repo root (contains/gains `.agentic-os/`). */
+  /** The target project's repo root (contains/gains `.cohort/`). */
   projectDir: string;
   /** Directory holding the five shipped `*.yaml` defaults (`<repo>/config`). */
   platformConfigDir: string;
@@ -167,7 +167,7 @@ export async function createAgenticMcpServer(opts: CreateAgenticMcpServerOptions
   const client = opts.deps?.client ?? createOpencodeClient();
   const fetchFn = opts.deps?.fetchFn ?? fetch;
 
-  const stateRoot = join(projectDir, ".agentic-os");
+  const stateRoot = join(projectDir, ".cohort");
   const overridesDir = join(stateRoot, "config");
   const config = await loadConfig(opts.platformConfigDir, (await directoryExists(overridesDir)) ? overridesDir : undefined);
 
@@ -208,7 +208,7 @@ export async function createAgenticMcpServer(opts: CreateAgenticMcpServerOptions
   // run must still see prior runs' mission/decision-log/etc). `sections`
   // (config/schema.ts's MemoryFileSchema, extending memory/index.ts's own
   // `OpenMemoryStoreOptions.sections`) lets a project declare extra section
-  // names in `.agentic-os/config/memory.yaml` so the `memory` tool accepts
+  // names in `.cohort/config/memory.yaml` so the `memory` tool accepts
   // them with no code change here.
   const memory = openMemoryStore(join(stateRoot, "memory"), { sections: config.memory.sections });
 
@@ -235,7 +235,7 @@ export async function createAgenticMcpServer(opts: CreateAgenticMcpServerOptions
     serialChains: new Map()
   };
 
-  const server = new McpServer({ name: "agentic-os", version: "0.1.0" });
+  const server = new McpServer({ name: "cohort", version: "0.1.0" });
   registerTools(server, ctx);
 
   return {
@@ -327,7 +327,7 @@ interface ServerCtx {
   cachedFreeModel: Promise<ResolveFreeModelResult> | undefined;
   /** M2 DAG-aware task board, bound to `<runDir>/task-board.json`; loaded once at server startup (see `createAgenticMcpServer`). */
   taskStore: TaskCardStore;
-  /** Cross-run shared project memory, bound to `<projectDir>/.agentic-os/memory` — NOT under `runDir`. */
+  /** Cross-run shared project memory, bound to `<projectDir>/.cohort/memory` — NOT under `runDir`. */
   memory: MemoryStore;
   /** Reviewer verdict storage, bound to `<runDir>/reviews/` — scoped to this run, like `taskStore`. */
   reviewStore: ReviewStore;
@@ -958,7 +958,7 @@ function registerTools(server: McpServer, ctx: ServerCtx): void {
       title: "Integrate Batch",
       description:
         "Merges every batch task whose worker has reached 'verified' into this run's shared integration branch " +
-        "(agentic/integration/<runId>, created from the run's base branch on first use), in DAG order. Tasks whose " +
+        "(cohort/integration/<runId>, created from the run's base branch on first use), in DAG order. Tasks whose " +
         "worker isn't verified yet are skipped and returned separately as notVerified, rather than failing the " +
         "call. NOTE on projectDir's checkout: merging runs directly against projectDir (the same mechanism " +
         "finalize_worker uses), which switches projectDir's checked-out branch as a side effect — this tool " +
@@ -1024,7 +1024,7 @@ function registerTools(server: McpServer, ctx: ServerCtx): void {
       title: "Memory",
       description:
         "Read, write, append to, or bundle sections of this project's shared cross-run memory " +
-        "(<projectDir>/.agentic-os/memory). 'read' returns one section's raw content (null if never written). " +
+        "(<projectDir>/.cohort/memory). 'read' returns one section's raw content (null if never written). " +
         "'write' overwrites a snapshot section (mission/architecture/standards/progress/future-work/contracts/" +
         "task-graph) — rejected for append-only sections. 'append' adds a stamped JSON entry to an append-only " +
         "section (decision-log/known-bugs) — rejected for snapshot sections. 'bundle' concatenates multiple " +

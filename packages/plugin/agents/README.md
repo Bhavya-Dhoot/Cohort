@@ -1,12 +1,12 @@
 # Reviewer subagents
 
 Dedicated Claude Code subagent definitions for the review step in
-`skills/agentic-os/SKILL.md` section 4a. Each file is one reviewer:
+`skills/cohort/SKILL.md` section 4a. Each file is one reviewer:
 `security.md`, `performance.md`, `architecture.md`, `testing.md`,
 `style.md`, `documentation.md`, `accessibility.md`.
 
 **Read-only guarantee:** every reviewer's frontmatter declares
-`tools: Read, Grep, Glob, mcp__agentic-os__review_verdict` — read access to
+`tools: Read, Grep, Glob, mcp__cohort__review_verdict` — read access to
 the codebase plus the one MCP tool needed to write a verdict, and nothing
 else: no `Edit`, `Write`, `NotebookEdit`, or `Bash`. This is enforced by the
 tool allowlist itself, not by prompt convention: a reviewer structurally

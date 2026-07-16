@@ -18,7 +18,7 @@ let root: string;
 let projectDir: string;
 
 beforeEach(async () => {
-  root = join(tmpdir(), `agentic-os-pipeline-test-${randomBytes(6).toString("hex")}`);
+  root = join(tmpdir(), `cohort-pipeline-test-${randomBytes(6).toString("hex")}`);
   projectDir = join(root, "repo");
   await mkdir(projectDir, { recursive: true });
 
@@ -181,15 +181,15 @@ async function pathExists(path: string): Promise<boolean> {
 }
 
 async function readRunId(forProjectDir: string): Promise<string> {
-  const raw = await readFile(join(forProjectDir, ".agentic-os", "current-run.json"), "utf8");
+  const raw = await readFile(join(forProjectDir, ".cohort", "current-run.json"), "utf8");
   return (JSON.parse(raw) as { runId: string }).runId;
 }
 
-/** Writes a `.agentic-os/config/orchestrator.yaml` override registering a trivial always-passing check suite. */
+/** Writes a `.cohort/config/orchestrator.yaml` override registering a trivial always-passing check suite. */
 async function writeTrivialSuiteOverride(forProjectDir: string): Promise<void> {
-  await mkdir(join(forProjectDir, ".agentic-os", "config"), { recursive: true });
+  await mkdir(join(forProjectDir, ".cohort", "config"), { recursive: true });
   await writeFile(
-    join(forProjectDir, ".agentic-os", "config", "orchestrator.yaml"),
+    join(forProjectDir, ".cohort", "config", "orchestrator.yaml"),
     'checks:\n  suites:\n    trivial:\n      - name: noop\n        command: "node -e \\"process.exit(0)\\""\n',
     "utf8"
   );
@@ -218,7 +218,7 @@ describe("plan_submit", () => {
 
       const runId = await readRunId(projectDir);
       const board = JSON.parse(
-        await readFile(join(projectDir, ".agentic-os", "runs", runId, "task-board.json"), "utf8")
+        await readFile(join(projectDir, ".cohort", "runs", runId, "task-board.json"), "utf8")
       );
       expect(board.tasks).toHaveLength(3);
       expect(board.tasks.every((t: { status: string }) => t.status === "pending")).toBe(true);
@@ -241,8 +241,8 @@ describe("plan_submit", () => {
       expect(res.data.cycles.length).toBeGreaterThan(0);
 
       const runId = await readRunId(projectDir);
-      expect(await pathExists(join(projectDir, ".agentic-os", "runs", runId, "task-board.json"))).toBe(false);
-      expect(await pathExists(join(projectDir, ".agentic-os", "runs", runId, "plan.json"))).toBe(false);
+      expect(await pathExists(join(projectDir, ".cohort", "runs", runId, "task-board.json"))).toBe(false);
+      expect(await pathExists(join(projectDir, ".cohort", "runs", runId, "plan.json"))).toBe(false);
     } finally {
       await close();
     }
@@ -276,8 +276,8 @@ describe("plan_submit", () => {
       expect(res.data.issues.some((i: string) => i.includes("shipping"))).toBe(true);
 
       const runId = await readRunId(projectDir);
-      expect(await pathExists(join(projectDir, ".agentic-os", "runs", runId, "task-board.json"))).toBe(false);
-      expect(await pathExists(join(projectDir, ".agentic-os", "runs", runId, "plan.json"))).toBe(false);
+      expect(await pathExists(join(projectDir, ".cohort", "runs", runId, "task-board.json"))).toBe(false);
+      expect(await pathExists(join(projectDir, ".cohort", "runs", runId, "plan.json"))).toBe(false);
     } finally {
       await close();
     }
@@ -308,7 +308,7 @@ describe("plan_submit", () => {
       expect(res.data).toMatchObject({ taskCount: 2, valid: true });
 
       const runId = await readRunId(projectDir);
-      const plan = JSON.parse(await readFile(join(projectDir, ".agentic-os", "runs", runId, "plan.json"), "utf8"));
+      const plan = JSON.parse(await readFile(join(projectDir, ".cohort", "runs", runId, "plan.json"), "utf8"));
       expect(plan.domains).toEqual([{ id: "auth", name: "Auth" }]);
       expect(plan.orgChart).toEqual(orgChart);
     } finally {
@@ -475,7 +475,7 @@ describe("full batch pipeline", () => {
 
       const integrated = await callTool(mcp, "integrate_batch", { batchId, regressionSuite: "trivial" });
       expect(integrated.isError).toBeFalsy();
-      expect(integrated.data.integrationBranch).toBe(`agentic/integration/${await readRunId(projectDir)}`);
+      expect(integrated.data.integrationBranch).toBe(`cohort/integration/${await readRunId(projectDir)}`);
       expect(integrated.data.notVerified).toEqual([]);
       expect(integrated.data.merges).toHaveLength(3);
       expect(integrated.data.merges.every((m: { outcome: string }) => m.outcome === "merged")).toBe(true);
@@ -770,7 +770,7 @@ describe("run_check_suite", () => {
 
       const runId = await readRunId(projectDir);
       expect(
-        await pathExists(join(projectDir, ".agentic-os", "runs", runId, "checks", "project-trivial-1.json"))
+        await pathExists(join(projectDir, ".cohort", "runs", runId, "checks", "project-trivial-1.json"))
       ).toBe(true);
     } finally {
       await close();
@@ -798,8 +798,8 @@ describe("replan_record", () => {
       expect(third.data).toMatchObject({ iteration: 3, escalate: true, capRemaining: 0 });
 
       const runId = await readRunId(projectDir);
-      expect(await pathExists(join(projectDir, ".agentic-os", "runs", runId, "replans", "3.json"))).toBe(false);
-      expect(await pathExists(join(projectDir, ".agentic-os", "runs", runId, "replans", "2.json"))).toBe(true);
+      expect(await pathExists(join(projectDir, ".cohort", "runs", runId, "replans", "3.json"))).toBe(false);
+      expect(await pathExists(join(projectDir, ".cohort", "runs", runId, "replans", "2.json"))).toBe(true);
     } finally {
       await close();
     }
@@ -818,12 +818,12 @@ describe("replan_record", () => {
 
       const runId = await readRunId(projectDir);
       const record = JSON.parse(
-        await readFile(join(projectDir, ".agentic-os", "runs", runId, "replans", "1.json"), "utf8")
+        await readFile(join(projectDir, ".cohort", "runs", runId, "replans", "1.json"), "utf8")
       );
       expect(record.newTaskIds).toEqual(["task-new"]);
 
       const board = JSON.parse(
-        await readFile(join(projectDir, ".agentic-os", "runs", runId, "task-board.json"), "utf8")
+        await readFile(join(projectDir, ".cohort", "runs", runId, "task-board.json"), "utf8")
       );
       expect(board.tasks.map((t: { id: string }) => t.id)).toContain("task-new");
       expect(board.tasks.find((t: { id: string }) => t.id === "task-new").status).toBe("pending");
@@ -848,8 +848,8 @@ describe("replan_record", () => {
       expect(res.data.cycles.length).toBeGreaterThan(0);
 
       const runId = await readRunId(projectDir);
-      expect(await pathExists(join(projectDir, ".agentic-os", "runs", runId, "replans", "1.json"))).toBe(false);
-      expect(await pathExists(join(projectDir, ".agentic-os", "runs", runId, "task-board.json"))).toBe(false);
+      expect(await pathExists(join(projectDir, ".cohort", "runs", runId, "replans", "1.json"))).toBe(false);
+      expect(await pathExists(join(projectDir, ".cohort", "runs", runId, "task-board.json"))).toBe(false);
     } finally {
       await close();
     }
@@ -887,8 +887,8 @@ describe("replan_record", () => {
       expect(iterations).toEqual([1, 2]);
 
       const runId = await readRunId(projectDir);
-      expect(await pathExists(join(projectDir, ".agentic-os", "runs", runId, "replans", "1.json"))).toBe(true);
-      expect(await pathExists(join(projectDir, ".agentic-os", "runs", runId, "replans", "2.json"))).toBe(true);
+      expect(await pathExists(join(projectDir, ".cohort", "runs", runId, "replans", "1.json"))).toBe(true);
+      expect(await pathExists(join(projectDir, ".cohort", "runs", runId, "replans", "2.json"))).toBe(true);
     } finally {
       await close();
     }

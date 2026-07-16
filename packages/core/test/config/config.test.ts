@@ -59,7 +59,7 @@ opencode_binary_path: opencode
 const tmpDirs: string[] = [];
 
 function makeTmpDir(label: string): string {
-  const dir = join(tmpdir(), `agentic-os-config-test-${label}-${randomBytes(6).toString("hex")}`);
+  const dir = join(tmpdir(), `cohort-config-test-${label}-${randomBytes(6).toString("hex")}`);
   tmpDirs.push(dir);
   return dir;
 }
@@ -136,26 +136,26 @@ describe("loadConfig", () => {
   it("interpolates ${VAR} placeholders from process.env", async () => {
     const dir = makeTmpDir("interp-set");
     await writeConfigDir(dir, {
-      models: 'routing:\n  default: "${TEST_AGENTIC_OS_MODEL}"\n'
+      models: 'routing:\n  default: "${TEST_COHORT_MODEL}"\n'
     });
 
-    process.env.TEST_AGENTIC_OS_MODEL = "anthropic/claude-opus";
+    process.env.TEST_COHORT_MODEL = "anthropic/claude-opus";
     try {
       const config = await loadConfig(dir);
       expect(config.models.routing.default).toBe("anthropic/claude-opus");
     } finally {
-      delete process.env.TEST_AGENTIC_OS_MODEL;
+      delete process.env.TEST_COHORT_MODEL;
     }
   });
 
   it("throws a clear error when an interpolated env var is unset", async () => {
     const dir = makeTmpDir("interp-unset");
     await writeConfigDir(dir, {
-      models: 'routing:\n  default: "${TEST_AGENTIC_OS_MISSING_VAR}"\n'
+      models: 'routing:\n  default: "${TEST_COHORT_MISSING_VAR}"\n'
     });
-    delete process.env.TEST_AGENTIC_OS_MISSING_VAR;
+    delete process.env.TEST_COHORT_MISSING_VAR;
 
-    await expect(loadConfig(dir)).rejects.toThrow(/TEST_AGENTIC_OS_MISSING_VAR/);
+    await expect(loadConfig(dir)).rejects.toThrow(/TEST_COHORT_MISSING_VAR/);
   });
 
   it("rejects invalid config values with a useful, file-scoped error", async () => {

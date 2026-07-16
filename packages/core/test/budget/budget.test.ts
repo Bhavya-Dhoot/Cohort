@@ -9,7 +9,7 @@ let dir: string;
 let filePath: string;
 
 beforeEach(() => {
-  dir = join(tmpdir(), `agentic-os-budget-test-${randomBytes(6).toString("hex")}`);
+  dir = join(tmpdir(), `cohort-budget-test-${randomBytes(6).toString("hex")}`);
   filePath = join(dir, "cost.json");
 });
 

@@ -1,10 +1,10 @@
 #!/usr/bin/env node
 /**
- * scripts/m4-accept.mjs — M4 acceptance test for Agentic OS.
+ * scripts/m4-accept.mjs — M4 acceptance test for Cohort.
  *
  * Proves two things end-to-end with a REAL OpenCode worker on a free model,
  * driven entirely through the real MCP tool surface: (1) a project can add a
- * custom check suite via a partial `.agentic-os/config/orchestrator.yaml`
+ * custom check suite via a partial `.cohort/config/orchestrator.yaml`
  * override with zero code changes, and that suite actually runs live through
  * `run_check_suite`; (2) `run_report` renders a correct observability report
  * (structured summary + markdown with both mermaid diagrams) from real
@@ -40,7 +40,7 @@
  *     (rather than replacing them). This script uses that partial-override
  *     form, not a full copy of the shipped file.
  *   - `createAgenticMcpServer` (mcp/server.ts) only applies a project
- *     override if `<projectDir>/.agentic-os/config` exists at server-start
+ *     override if `<projectDir>/.cohort/config` exists at server-start
  *     time (`directoryExists(overridesDir)` gates `loadConfig`'s second
  *     arg) -- so the override file below is written before the server is
  *     created, not after.
@@ -161,7 +161,7 @@ async function tailFile(filePath, maxChars = 4000) {
 }
 
 function runDirFor(repo, id) {
-  return path.join(repo, ".agentic-os", "runs", id);
+  return path.join(repo, ".cohort", "runs", id);
 }
 
 function workerMetaPath(workerId) {
@@ -246,8 +246,8 @@ async function main() {
 
   log(`scratch repo: ${repoDir}`);
   git(["init", "-b", "main"], repoDir);
-  git(["config", "user.email", "m4-accept@agentic-os.local"], repoDir);
-  git(["config", "user.name", "Agentic OS M4 Accept"], repoDir);
+  git(["config", "user.email", "m4-accept@cohort.local"], repoDir);
+  git(["config", "user.name", "Cohort M4 Accept"], repoDir);
   git(["config", "core.autocrlf", "false"], repoDir);
 
   // Trivial package.json: "typecheck" and "test" both exit 0 -- so
@@ -275,7 +275,7 @@ async function main() {
   // defaults untouched, and `checks.suites` gains a `smoke` suite alongside
   // the shipped `quick`/`full` ones. This proves a project can add a check
   // command with zero code change, not just a config-file swap.
-  const overrideDir = path.join(repoDir, ".agentic-os", "config");
+  const overrideDir = path.join(repoDir, ".cohort", "config");
   await mkdir(overrideDir, { recursive: true });
   const overrideYaml = [
     "checks:",
@@ -292,7 +292,7 @@ async function main() {
   const { createAgenticMcpServer } = await import("../packages/core/dist/mcp/server.js");
   agenticServer = await createAgenticMcpServer({ projectDir: repoDir, platformConfigDir: PLATFORM_CONFIG_DIR });
 
-  runId = JSON.parse(await readFile(path.join(repoDir, ".agentic-os", "current-run.json"), "utf8")).runId;
+  runId = JSON.parse(await readFile(path.join(repoDir, ".cohort", "current-run.json"), "utf8")).runId;
   log(`runId: ${runId}`);
 
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
@@ -523,7 +523,7 @@ async function main() {
   for (const [taskId, w] of workers) {
     console.log(`  ${taskId}: workerId=${w.workerId} state=${w.lastState} model=${perTaskModels[taskId]} failed=${w.failed}`);
   }
-  console.log(`custom check suite: '${CUSTOM_SUITE}' (added via .agentic-os/config/orchestrator.yaml override) -> passed=${checked.data.passed}, checks=[${customCheckNames.join(", ")}]`);
+  console.log(`custom check suite: '${CUSTOM_SUITE}' (added via .cohort/config/orchestrator.yaml override) -> passed=${checked.data.passed}, checks=[${customCheckNames.join(", ")}]`);
   console.log(`total committed cost: $${totalCost}`);
   console.log(`integration branch: ${integrationBranch} @ ${integrationSha}`);
   console.log(`file merged: ${TASK.file}`);

@@ -14,7 +14,7 @@ import { runCheckSuite, type CheckDefinition } from "../../src/checks/index.js";
 let dir: string;
 
 beforeEach(async () => {
-  dir = join(tmpdir(), `agentic-os-checks-e2e-${randomBytes(6).toString("hex")}`);
+  dir = join(tmpdir(), `cohort-checks-e2e-${randomBytes(6).toString("hex")}`);
   await mkdir(dir, { recursive: true });
 });
 

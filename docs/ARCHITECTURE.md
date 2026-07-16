@@ -1,8 +1,8 @@
-# Agentic OS — Architecture
+# Cohort — Architecture
 
 ## Overview & goals
 
-Agentic OS turns a single objective — e.g. "Build an AI CRM with OAuth,
+Cohort turns a single objective — e.g. "Build an AI CRM with OAuth,
 Stripe, Docker, PostgreSQL and CI/CD" — into a completed software project
 autonomously: analyze → design org → generate specialists → launch isolated
 OpenCode workers → parallel dev → shared memory → continuous review →
@@ -24,7 +24,7 @@ end: analyze → generate org/domains → generate specialists → dispatch
 DAG-ordered batches of OpenCode workers → independently verify → collect
 reviewer verdicts → integrate → run regression → replan → report. Judgment
 (what to build, who reviews it, when to stop) stays in Claude Code, the
-`agentic-os` skill; the core library and its 18 MCP tools are mechanics
+`cohort` skill; the core library and its 18 MCP tools are mechanics
 only — persistence, process control, verification, guardrails.
 
 **Form factor.** The core engine ships as a standalone TypeScript library
@@ -67,7 +67,7 @@ reviewers → integration — is **generated per project as a plan artifact**
 processes. Prior-art measurements (CrewAI-style manager/worker setups) show
 live manager layers multiply token cost at every hop without adding
 measurable correctness, and a "single lead" becomes a bottleneck under real
-parallelism. Agentic OS keeps exactly one live lead: Claude Code plays
+parallelism. Cohort keeps exactly one live lead: Claude Code plays
 CEO/planner/EM in-session; domain leads/reviewers materialize as scoped
 Claude subagents only when a phase needs one; specialists materialize as
 generated OpenCode agent files consumed by workers. The hierarchy is real —
@@ -141,7 +141,7 @@ interface, not a dedicated module — see **Extensibility** below.
 ```mermaid
 flowchart TB
     subgraph ClaudeCode["Claude Code session (CEO / planner / reviewer)"]
-        Skill["/agentic-os skill (UX layer)"]
+        Skill["/cohort skill (UX layer)"]
     end
     subgraph MCPServer["MCP stdio server (packages/core/src/mcp)"]
         Tools["18 MCP tools"]
@@ -156,7 +156,7 @@ flowchart TB
         Sessions["N concurrent sessions"]
     end
     subgraph Disk["Disk (source of truth)"]
-        RunState[".agentic-os/runs/<runId>/*"]
+        RunState[".cohort/runs/<runId>/*"]
         Worktrees["../<project>-agentic-worktrees/<runId>/<workerId>"]
     end
     Skill -->|calls| Tools
@@ -275,7 +275,7 @@ flowchart TD
   development. SQLite is revisited for M2 only if DAG queries demand
   relational access JSONL can't reasonably serve.
 - **`opencode serve` runs detached** (`spawn({detached:true})` +
-  `.unref()`), PID + port recorded in `.agentic-os/server.json`. This
+  `.unref()`), PID + port recorded in `.cohort/server.json`. This
   decouples worker liveness from the Claude Code / MCP process: a crash or
   restart of Claude Code does not kill running workers.
 - **Crash reconciliation.** On MCP restart: probe the recorded PID
@@ -347,7 +347,7 @@ docs/ARCHITECTURE.md  docs/decisions/
 package.json (npm workspaces), tsconfig.base.json
 ```
 
-**Target project runtime** (`<project>\.agentic-os\`, gitignored):
+**Target project runtime** (`<project>\.cohort\`, gitignored):
 
 ```
 config/                          # overrides of shipped defaults
@@ -368,7 +368,7 @@ project's own path prefix out of the worktree path.
 ## Config
 
 Five shipped YAML files under `config/`, each overridable per target
-project in `<project>\.agentic-os\config\`:
+project in `<project>\.cohort\config\`:
 
 - **`providers.yaml`** — provider defs; only `apiKeyEnv` **names** are
   stored, never literal keys; also `opencode_binary_path`.

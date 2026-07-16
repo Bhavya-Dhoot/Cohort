@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * scripts/demo-run.mjs — two-phase live demo driver for Agentic OS's
+ * scripts/demo-run.mjs — two-phase live demo driver for Cohort's
  * autonomous loop, split around a REAL Claude-subagent review step.
  *
  * Unlike scripts/m3-accept.mjs (a single-process acceptance test that
@@ -16,7 +16,7 @@
  *    verdicts to <scratchRoot>/verdicts.json]
  *
  *   node scripts/demo-run.mjs integrate  -- reattaches to the SAME run
- *     (via .agentic-os/current-run.json), records the real verdicts,
+ *     (via .cohort/current-run.json), records the real verdicts,
  *     excludes any blocked task from the merge, integrates the rest,
  *     retires the specialists, and renders run_report.
  *
@@ -26,7 +26,7 @@
  *
  * Two invocations sharing one run only works because the scratch project
  * directory is FIXED (not timestamped, unlike M2/M3/M4's *_SCRATCH_DIR) --
- * both phases resolve the identical <projectDir>/.agentic-os/current-run.json
+ * both phases resolve the identical <projectDir>/.cohort/current-run.json
  * and therefore converge on the identical runId (see mcp/server.ts's
  * resolveRunId). DEMO_DIR overrides the scratch root for both phases; it
  * must be set identically for 'build' and 'integrate' or they will not agree
@@ -86,7 +86,7 @@ const REPO_ROOT = path.resolve(__dirname, "..");
 const PLATFORM_CONFIG_DIR = path.join(REPO_ROOT, "config");
 
 // Fixed (NOT timestamped) scratch root -- both phases, run as separate
-// processes, must resolve the same .agentic-os/current-run.json and
+// processes, must resolve the same .cohort/current-run.json and
 // therefore the same runId. DEMO_DIR overrides the root.
 const SCRATCH_ROOT = process.env.DEMO_DIR ?? path.join(os.tmpdir(), "agentic-demo-run");
 const REPO_DIR = path.join(SCRATCH_ROOT, "project");
@@ -286,7 +286,7 @@ function capText(text, maxChars = DIFF_CHAR_CAP) {
 }
 
 function runDirFor(repo, id) {
-  return path.join(repo, ".agentic-os", "runs", id);
+  return path.join(repo, ".cohort", "runs", id);
 }
 
 function workerMetaPath(workerId) {
@@ -360,7 +360,7 @@ async function fail(message) {
   process.exit(1);
 }
 
-/** Reads <repoDir>/.agentic-os/runs/<runId>/server.json and force-kills that pid, best-effort. */
+/** Reads <repoDir>/.cohort/runs/<runId>/server.json and force-kills that pid, best-effort. */
 async function killServeForRun(id) {
   try {
     const serverJsonPath = path.join(runDirFor(repoDir, id), "server.json");
@@ -374,7 +374,7 @@ async function killServeForRun(id) {
 
 /** Best-effort: kill opencode serve for every run this scratch project has ever created (used by 'reset'). */
 async function killAllServesUnderProject() {
-  const runsDir = path.join(repoDir, ".agentic-os", "runs");
+  const runsDir = path.join(repoDir, ".cohort", "runs");
   let entries;
   try {
     entries = await readdir(runsDir);
@@ -390,7 +390,7 @@ async function connectServer() {
   const { createAgenticMcpServer } = await import("../packages/core/dist/mcp/server.js");
   agenticServer = await createAgenticMcpServer({ projectDir: repoDir, platformConfigDir: PLATFORM_CONFIG_DIR });
 
-  runId = JSON.parse(await readFile(path.join(repoDir, ".agentic-os", "current-run.json"), "utf8")).runId;
+  runId = JSON.parse(await readFile(path.join(repoDir, ".cohort", "current-run.json"), "utf8")).runId;
   log(`runId: ${runId}`);
 
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
@@ -425,8 +425,8 @@ async function phaseBuild() {
   await mkdir(path.join(repoDir, "src"), { recursive: true });
   log(`scratch repo: ${repoDir}`);
   git(["init", "-b", "main"], repoDir);
-  git(["config", "user.email", "demo-run@agentic-os.local"], repoDir);
-  git(["config", "user.name", "Agentic OS Demo Run"], repoDir);
+  git(["config", "user.email", "demo-run@cohort.local"], repoDir);
+  git(["config", "user.name", "Cohort Demo Run"], repoDir);
   git(["config", "core.autocrlf", "false"], repoDir);
 
   // Trivial package.json: "typecheck" and "test" both exit 0 -- so

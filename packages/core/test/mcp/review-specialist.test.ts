@@ -25,7 +25,7 @@ let root: string;
 let projectDir: string;
 
 beforeEach(async () => {
-  root = join(tmpdir(), `agentic-os-review-specialist-test-${randomBytes(6).toString("hex")}`);
+  root = join(tmpdir(), `cohort-review-specialist-test-${randomBytes(6).toString("hex")}`);
   projectDir = join(root, "repo");
   await mkdir(projectDir, { recursive: true });
 
@@ -188,23 +188,23 @@ async function pathExists(path: string): Promise<boolean> {
 }
 
 async function readRunId(forProjectDir: string): Promise<string> {
-  const raw = await readFile(join(forProjectDir, ".agentic-os", "current-run.json"), "utf8");
+  const raw = await readFile(join(forProjectDir, ".cohort", "current-run.json"), "utf8");
   return (JSON.parse(raw) as { runId: string }).runId;
 }
 
 async function readRunEvents(forProjectDir: string): Promise<Array<Record<string, unknown>>> {
   const runId = await readRunId(forProjectDir);
-  const raw = await readFile(join(forProjectDir, ".agentic-os", "runs", runId, "events.jsonl"), "utf8");
+  const raw = await readFile(join(forProjectDir, ".cohort", "runs", runId, "events.jsonl"), "utf8");
   return raw
     .split("\n")
     .filter((line) => line.length > 0)
     .map((line) => JSON.parse(line) as Record<string, unknown>);
 }
 
-/** Writes a `.agentic-os/config/<name>.yaml` override, mirroring pipeline.test.ts's writeTrivialSuiteOverride. */
+/** Writes a `.cohort/config/<name>.yaml` override, mirroring pipeline.test.ts's writeTrivialSuiteOverride. */
 async function writeConfigOverride(forProjectDir: string, name: string, yaml: string): Promise<void> {
-  await mkdir(join(forProjectDir, ".agentic-os", "config"), { recursive: true });
-  await writeFile(join(forProjectDir, ".agentic-os", "config", `${name}.yaml`), yaml, "utf8");
+  await mkdir(join(forProjectDir, ".cohort", "config"), { recursive: true });
+  await writeFile(join(forProjectDir, ".cohort", "config", `${name}.yaml`), yaml, "utf8");
 }
 
 // ---------------------------------------------------------------------------

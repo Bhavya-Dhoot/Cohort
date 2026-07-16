@@ -1,6 +1,6 @@
 # Orchestrator run-level defaults: budget guardrails, replan cap, human
 # gates, and worker pool sizing. Overridable per-project in
-# <project>\.agentic-os\config\orchestrator.yaml.
+# <project>\.cohort\config\orchestrator.yaml.
 
 budget:
   softCapUsd: 5
@@ -26,7 +26,7 @@ worktree:
 # Named multi-command check suites, run via checks/runCheckSuite (wraps
 # verify/runVerification per command). These are sensible defaults for a
 # JS/TS target project; a real project overrides them via
-# <project>\.agentic-os\config\orchestrator.yaml.
+# <project>\.cohort\config\orchestrator.yaml.
 checks:
   suites:
     quick:

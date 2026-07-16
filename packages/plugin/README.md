@@ -1,8 +1,8 @@
-# agentic-os (Claude Code plugin)
+# cohort (Claude Code plugin)
 
 Spawns and manages OpenCode implementation workers in isolated git
 worktrees, exposed to Claude Code as an MCP tool surface plus the
-`agentic-os` skill (see `skills/agentic-os/SKILL.md` for the worker loop).
+`cohort` skill (see `skills/cohort/SKILL.md` for the worker loop).
 
 ## Prerequisite
 
@@ -35,7 +35,7 @@ of the five files (`orchestrator`, `models`, `agents`, `memory`,
 under:
 
 ```
-<project>/.agentic-os/config/*.yaml
+<project>/.cohort/config/*.yaml
 ```
 
 Only the keys you set are overridden — each file is deep-merged over its
@@ -44,6 +44,6 @@ shipped default, not replaced wholesale.
 ## Live run monitor
 
 `monitors/monitors.json` tails the active run's event log
-(`.agentic-os/runs/<runId>/events.jsonl`) and prints new lines prefixed
-`[agentic-os]` as tool calls happen, so run activity is visible without
+(`.cohort/runs/<runId>/events.jsonl`) and prints new lines prefixed
+`[cohort]` as tool calls happen, so run activity is visible without
 polling `worker_status` manually.

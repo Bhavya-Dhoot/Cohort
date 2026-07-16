@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * scripts/m3-accept.mjs — M3 acceptance test for Agentic OS.
+ * scripts/m3-accept.mjs — M3 acceptance test for Cohort.
  *
  * Proves the dynamic-org / specialist / reviewer pipeline end-to-end with
  * REAL OpenCode workers on free models, driven entirely through the real MCP
@@ -232,7 +232,7 @@ async function tailFile(filePath, maxChars = 4000) {
 }
 
 function runDirFor(repo, id) {
-  return path.join(repo, ".agentic-os", "runs", id);
+  return path.join(repo, ".cohort", "runs", id);
 }
 
 function workerMetaPath(workerId) {
@@ -320,8 +320,8 @@ async function main() {
 
   log(`scratch repo: ${repoDir}`);
   git(["init", "-b", "main"], repoDir);
-  git(["config", "user.email", "m3-accept@agentic-os.local"], repoDir);
-  git(["config", "user.name", "Agentic OS M3 Accept"], repoDir);
+  git(["config", "user.email", "m3-accept@cohort.local"], repoDir);
+  git(["config", "user.name", "Cohort M3 Accept"], repoDir);
   git(["config", "core.autocrlf", "false"], repoDir);
 
   // Trivial package.json: "typecheck" and "test" both exit 0 -- so
@@ -345,7 +345,7 @@ async function main() {
   const { createAgenticMcpServer } = await import("../packages/core/dist/mcp/server.js");
   agenticServer = await createAgenticMcpServer({ projectDir: repoDir, platformConfigDir: PLATFORM_CONFIG_DIR });
 
-  runId = JSON.parse(await readFile(path.join(repoDir, ".agentic-os", "current-run.json"), "utf8")).runId;
+  runId = JSON.parse(await readFile(path.join(repoDir, ".cohort", "current-run.json"), "utf8")).runId;
   log(`runId: ${runId}`);
 
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();

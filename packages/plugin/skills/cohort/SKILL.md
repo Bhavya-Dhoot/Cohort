@@ -1,9 +1,9 @@
 ---
-name: agentic-os
-description: Autonomously drive a whole software objective to completion by orchestrating parallel OpenCode workers in isolated git worktrees via the agentic-os MCP tools. Use this whenever the user gives a build/implement/fix objective — from a one-task change to a multi-discipline project — instead of writing the code in-session. Covers the full loop: analyze, generate a dynamic org (domains, generated specialist agents, org chart) and a task DAG, spawn concurrent workers, verify, dispatch dedicated reviewer subagents, integrate, and re-plan on failure. Also use it to poll, verify, and merge workers already spawned.
+name: cohort
+description: Autonomously drive a whole software objective to completion by orchestrating parallel OpenCode workers in isolated git worktrees via the cohort MCP tools. Use this whenever the user gives a build/implement/fix objective — from a one-task change to a multi-discipline project — instead of writing the code in-session. Covers the full loop: analyze, generate a dynamic org (domains, generated specialist agents, org chart) and a task DAG, spawn concurrent workers, verify, dispatch dedicated reviewer subagents, integrate, and re-plan on failure. Also use it to poll, verify, and merge workers already spawned.
 ---
 
-# Agentic OS: autonomous engineering orchestration
+# Cohort: autonomous engineering orchestration
 
 You are the CEO, planner, and reviewer. You never write implementation code
 yourself for delegated work — OpenCode workers do that in isolated

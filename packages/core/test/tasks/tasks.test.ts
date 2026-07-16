@@ -22,7 +22,7 @@ function makeTask(overrides: Partial<TaskRecord> = {}): TaskRecord {
 }
 
 beforeEach(() => {
-  dir = join(tmpdir(), `agentic-os-tasks-test-${randomBytes(6).toString("hex")}`);
+  dir = join(tmpdir(), `cohort-tasks-test-${randomBytes(6).toString("hex")}`);
   filePath = join(dir, "task-board.json");
 });
 

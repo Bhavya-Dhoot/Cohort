@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 /**
- * Tails the current run's event log so the user sees agentic-os activity
+ * Tails the current run's event log so the user sees cohort activity
  * live in Claude Code's monitor pane, without polling MCP tools for it.
  *
- * Resolves <cwd>/.agentic-os/current-run.json -> runs/<runId>/events.jsonl
+ * Resolves <cwd>/.cohort/current-run.json -> runs/<runId>/events.jsonl
  * (the same run-level log `mcp/server.ts`'s runTool() appends one line to
  * per tool call — see docs/ARCHITECTURE.md "State & persistence"). Re-reads
  * current-run.json on every poll so it follows the run forward if a new one
@@ -26,7 +26,7 @@ import path from "node:path";
 
 const POLL_MS = 2000;
 const PROJECT_DIR = process.cwd();
-const CURRENT_RUN_PATH = path.join(PROJECT_DIR, ".agentic-os", "current-run.json");
+const CURRENT_RUN_PATH = path.join(PROJECT_DIR, ".cohort", "current-run.json");
 
 let currentRunId; // runId this process is currently tailing, or undefined
 let targetPath; // runs/<runId>/events.jsonl for currentRunId
@@ -36,7 +36,7 @@ let dirWatcher; // fs.watch handle on the run dir, re-armed per run
 let checking = false; // reentrancy guard: poll + watch callback can overlap
 
 function print(line) {
-  process.stdout.write(`[agentic-os] ${line}\n`);
+  process.stdout.write(`[cohort] ${line}\n`);
 }
 
 async function readRunId() {
@@ -65,7 +65,7 @@ function armWatcher(runDir) {
 
 async function switchTarget(runId) {
   currentRunId = runId;
-  const runDir = path.join(PROJECT_DIR, ".agentic-os", "runs", runId);
+  const runDir = path.join(PROJECT_DIR, ".cohort", "runs", runId);
   targetPath = path.join(runDir, "events.jsonl");
   pending = "";
   // Attach at current end-of-file: this is a live tail, not a replay of a

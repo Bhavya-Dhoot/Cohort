@@ -24,7 +24,7 @@ function makeCard(overrides: Partial<TaskCard> = {}): TaskCard {
 }
 
 beforeEach(() => {
-  dir = join(tmpdir(), `agentic-os-taskcard-test-${randomBytes(6).toString("hex")}`);
+  dir = join(tmpdir(), `cohort-taskcard-test-${randomBytes(6).toString("hex")}`);
   filePath = join(dir, "task-board.json");
 });
 

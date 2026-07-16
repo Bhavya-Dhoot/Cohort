@@ -29,7 +29,7 @@ let repoDir: string;
 let worktreePath: string;
 
 beforeEach(async () => {
-  root = join(tmpdir(), `agentic-os-remove-test-${randomBytes(6).toString("hex")}`);
+  root = join(tmpdir(), `cohort-remove-test-${randomBytes(6).toString("hex")}`);
   repoDir = join(root, "repo");
   worktreePath = join(root, "worktree");
   await mkdir(repoDir, { recursive: true });

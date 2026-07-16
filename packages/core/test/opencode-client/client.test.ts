@@ -15,7 +15,7 @@ let stateDir: string;
 let fake: FakeOpencodeServer;
 
 beforeEach(async () => {
-  stateDir = join(tmpdir(), `agentic-os-opencode-client-test-${randomBytes(6).toString("hex")}`);
+  stateDir = join(tmpdir(), `cohort-opencode-client-test-${randomBytes(6).toString("hex")}`);
   await mkdir(stateDir, { recursive: true });
   fake = await startFakeOpencodeServer();
 });

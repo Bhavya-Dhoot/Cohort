@@ -1,6 +1,6 @@
 # Live End-to-End Autonomous Run
 
-A real run of the whole Agentic OS loop, driven by **Claude as the orchestrator** through the actual MCP tools against a fresh throwaway project — not a hermetic test, not canned data. Reproduce with `npm run demo-run reset && npm run demo-run build` → (live reviews) → `npm run demo-run integrate` (see `scripts/demo-run.mjs`). Everything ran on the auto-selected free model `opencode/hy3-free` at **$0.00**.
+A real run of the whole Cohort loop, driven by **Claude as the orchestrator** through the actual MCP tools against a fresh throwaway project — not a hermetic test, not canned data. Reproduce with `npm run demo-run reset && npm run demo-run build` → (live reviews) → `npm run demo-run integrate` (see `scripts/demo-run.mjs`). Everything ran on the auto-selected free model `opencode/hy3-free` at **$0.00**.
 
 ## Objective → generated organization
 

@@ -18,7 +18,7 @@ function verdict(overrides: Partial<ReviewVerdictInput> = {}): ReviewVerdictInpu
 }
 
 beforeEach(() => {
-  runDir = join(tmpdir(), `agentic-os-review-test-${randomBytes(6).toString("hex")}`);
+  runDir = join(tmpdir(), `cohort-review-test-${randomBytes(6).toString("hex")}`);
 });
 
 afterEach(async () => {

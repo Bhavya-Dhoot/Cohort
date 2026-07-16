@@ -1,6 +1,6 @@
 {
   "mcpServers": {
-    "agentic-os": {
+    "cohort": {
       "command": "node",
       "args": ["${CLAUDE_PLUGIN_ROOT}/../core/dist/mcp/bin.js"],
       "env": {

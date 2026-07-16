@@ -20,7 +20,7 @@ let root: string;
 let projectDir: string;
 
 beforeEach(async () => {
-  root = join(tmpdir(), `agentic-os-mcp-test-${randomBytes(6).toString("hex")}`);
+  root = join(tmpdir(), `cohort-mcp-test-${randomBytes(6).toString("hex")}`);
   projectDir = join(root, "repo");
   await mkdir(projectDir, { recursive: true });
 
@@ -201,7 +201,7 @@ async function pathExists(path: string): Promise<boolean> {
 }
 
 async function readRunId(forProjectDir: string): Promise<string> {
-  const raw = await readFile(join(forProjectDir, ".agentic-os", "current-run.json"), "utf8");
+  const raw = await readFile(join(forProjectDir, ".cohort", "current-run.json"), "utf8");
   return (JSON.parse(raw) as { runId: string }).runId;
 }
 
@@ -209,7 +209,7 @@ async function readRunEvents(
   forProjectDir: string
 ): Promise<Array<{ type: string; tool?: string; ok?: boolean; workerId?: string; model?: string; reason?: string }>> {
   const runId = await readRunId(forProjectDir);
-  const raw = await readFile(join(forProjectDir, ".agentic-os", "runs", runId, "events.jsonl"), "utf8");
+  const raw = await readFile(join(forProjectDir, ".cohort", "runs", runId, "events.jsonl"), "utf8");
   return raw
     .split("\n")
     .filter((line) => line.length > 0)
@@ -320,7 +320,7 @@ describe("budget hard cap", () => {
       expect(statusA.data.budget.tier).toBe("soft");
 
       const runId = await readRunId(projectDir);
-      const workersDir = join(projectDir, ".agentic-os", "runs", runId, "workers");
+      const workersDir = join(projectDir, ".cohort", "runs", runId, "workers");
       const before = await readdir(workersDir);
       expect(before).toEqual([workerIdA]);
 
@@ -375,7 +375,7 @@ describe("stream_worker_log", () => {
     try {
       const workerId = "fake-worker-1";
       const runId = await readRunId(projectDir);
-      const workerDir = join(projectDir, ".agentic-os", "runs", runId, "workers", workerId);
+      const workerDir = join(projectDir, ".cohort", "runs", runId, "workers", workerId);
       await mkdir(workerDir, { recursive: true });
 
       const meta: WorkerMeta = {
@@ -534,7 +534,7 @@ describe("workerId path traversal", () => {
       expect(String(res.data.error)).toMatch(/workerId/);
 
       const runId = await readRunId(projectDir);
-      const workersDir = join(projectDir, ".agentic-os", "runs", runId, "workers");
+      const workersDir = join(projectDir, ".cohort", "runs", runId, "workers");
       const entries = await readdir(workersDir).catch(() => []);
       expect(entries).toEqual([]);
 
@@ -556,7 +556,7 @@ describe("workerId path traversal", () => {
       expect(String(res.data.error)).toMatch(/workerId/);
 
       const runId = await readRunId(projectDir);
-      const workersDir = join(projectDir, ".agentic-os", "runs", runId, "workers");
+      const workersDir = join(projectDir, ".cohort", "runs", runId, "workers");
       const entries = await readdir(workersDir).catch(() => []);
       expect(entries).toEqual([]);
       expect(await pathExists(join(projectDir, "..", "evil"))).toBe(false);
@@ -575,9 +575,9 @@ describe("spawn_worker infra failure", () => {
     // Force zero infra retries so the failure surfaces on the first attempt
     // with no backoff sleep (DEFAULT_INFRA_BACKOFF_MS would otherwise delay
     // this test by seconds).
-    await mkdir(join(projectDir, ".agentic-os", "config"), { recursive: true });
+    await mkdir(join(projectDir, ".cohort", "config"), { recursive: true });
     await writeFile(
-      join(projectDir, ".agentic-os", "config", "orchestrator.yaml"),
+      join(projectDir, ".cohort", "config", "orchestrator.yaml"),
       "worker:\n  infraRetryMax: 0\n",
       "utf8"
     );
@@ -642,7 +642,7 @@ describe("resolveRunId TOCTOU", () => {
 
       // Only one runId was ever persisted, and both workers landed under it.
       const runId = await readRunId(projectDir);
-      const workersDir = join(projectDir, ".agentic-os", "runs", runId, "workers");
+      const workersDir = join(projectDir, ".cohort", "runs", runId, "workers");
       const entries = (await readdir(workersDir)).sort();
       expect(entries).toEqual([workerIdA, workerIdB].sort());
 
@@ -759,7 +759,7 @@ describe("auto:free model resolution", () => {
       expect(String(spawned.data.error)).toMatch(/auto:free/);
 
       const runId = await readRunId(projectDir);
-      const workersDir = join(projectDir, ".agentic-os", "runs", runId, "workers");
+      const workersDir = join(projectDir, ".cohort", "runs", runId, "workers");
       const entries = await readdir(workersDir).catch(() => []);
       expect(entries).toEqual([]);
     } finally {

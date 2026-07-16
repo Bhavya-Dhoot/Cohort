@@ -60,7 +60,7 @@ export interface BudgetTracker {
 }
 
 export interface CreateBudgetTrackerOptions {
-  /** Path to the JSON snapshot file (e.g. `.agentic-os/runs/<runId>/cost.json`). */
+  /** Path to the JSON snapshot file (e.g. `.cohort/runs/<runId>/cost.json`). */
   filePath: string;
   softCapUsd: number;
   hardCapUsd: number;

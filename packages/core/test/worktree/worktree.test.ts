@@ -31,7 +31,7 @@ function normalizePath(path: string): string {
 }
 
 beforeEach(async () => {
-  root = join(tmpdir(), `agentic-os-worktree-test-${randomBytes(6).toString("hex")}`);
+  root = join(tmpdir(), `cohort-worktree-test-${randomBytes(6).toString("hex")}`);
   repoDir = join(root, "repo");
   worktreesDir = join(root, "worktrees");
   await mkdir(repoDir, { recursive: true });

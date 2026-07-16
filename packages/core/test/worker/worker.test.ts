@@ -24,7 +24,7 @@ async function pathExists(path: string): Promise<boolean> {
 }
 
 beforeEach(async () => {
-  root = join(tmpdir(), `agentic-os-worker-test-${randomBytes(6).toString("hex")}`);
+  root = join(tmpdir(), `cohort-worker-test-${randomBytes(6).toString("hex")}`);
   repoDir = join(root, "repo");
   worktreesDir = join(root, "worktrees");
   stateDir = join(root, "state");
@@ -571,7 +571,7 @@ describe("finalize guard: worktreePath is not a real worktree", () => {
       state: "verified",
       prompt: "p",
       worktreePath: deadWorktreePath,
-      branchName: "agentic/dead/worktree",
+      branchName: "cohort/dead/worktree",
       baseRef: "main",
       createdAt: Date.now(),
       updatedAt: Date.now(),

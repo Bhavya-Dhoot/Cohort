@@ -27,7 +27,7 @@ let projectDir: string;
 let serverPid: number | undefined;
 
 beforeEach(async () => {
-  root = join(tmpdir(), `agentic-os-opencode-client-it-${randomBytes(6).toString("hex")}`);
+  root = join(tmpdir(), `cohort-opencode-client-it-${randomBytes(6).toString("hex")}`);
   stateDir = join(root, "state");
   projectDir = join(root, "project");
   await mkdir(stateDir, { recursive: true });

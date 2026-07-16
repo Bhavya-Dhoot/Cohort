@@ -339,7 +339,7 @@ async function spawnWorker(ctx: Ctx, opts: SpawnOptions): Promise<WorkerMeta> {
 
     const baseRef = await resolveBaseRef(ctx);
     const worktreePath = worktreePathFor(ctx.worktreeBaseDir, ctx.runId, workerId);
-    const branchName = `agentic/${ctx.runId.slice(0, 8)}/${workerId.slice(0, 8)}`;
+    const branchName = `cohort/${ctx.runId.slice(0, 8)}/${workerId.slice(0, 8)}`;
 
     const info = await withInfraRetry(ctx, meta, "createWorktree", () =>
       createWorktree({ repoDir: ctx.repoDir, worktreePath, branchName, baseRef })

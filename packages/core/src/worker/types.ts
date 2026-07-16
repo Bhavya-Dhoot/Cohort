@@ -71,7 +71,7 @@ export interface WorkerSupervisorDefaults {
 
 export interface WorkerSupervisorDeps {
   client: OpencodeClient;
-  /** Directory holding `workers/<workerId>/{meta.json,events.jsonl}` (typically `<project>/.agentic-os`). */
+  /** Directory holding `workers/<workerId>/{meta.json,events.jsonl}` (typically `<project>/.cohort`). */
   stateDir: string;
   /** The target project's git repo. */
   repoDir: string;

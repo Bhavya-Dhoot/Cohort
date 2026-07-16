@@ -23,7 +23,7 @@ async function pathExists(path: string): Promise<boolean> {
 }
 
 beforeEach(async () => {
-  root = join(tmpdir(), `agentic-os-integration-test-${randomBytes(6).toString("hex")}`);
+  root = join(tmpdir(), `cohort-integration-test-${randomBytes(6).toString("hex")}`);
   repoDir = join(root, "repo");
   await mkdir(repoDir, { recursive: true });
 
@@ -44,13 +44,13 @@ afterEach(async () => {
 });
 
 describe("integrationBranchName", () => {
-  it("namespaces under agentic/integration/", () => {
-    expect(integrationBranchName("run-1")).toBe("agentic/integration/run-1");
+  it("namespaces under cohort/integration/", () => {
+    expect(integrationBranchName("run-1")).toBe("cohort/integration/run-1");
   });
 
   it("sanitizes characters that aren't valid in a ref segment", () => {
     expect(integrationBranchName("run 1/weird*chars?")).toBe(
-      "agentic/integration/run-1-weird-chars"
+      "cohort/integration/run-1-weird-chars"
     );
   });
 });
@@ -61,7 +61,7 @@ describe("ensureIntegrationBranch", () => {
     const { stdout: branchBefore } = await runGit(["rev-parse", "--abbrev-ref", "HEAD"], repoDir);
 
     const first = await ensureIntegrationBranch({ repoDir, runId: "run-1", baseRef: "main" });
-    expect(first.branchName).toBe("agentic/integration/run-1");
+    expect(first.branchName).toBe("cohort/integration/run-1");
     expect(first.created).toBe(true);
 
     const exists = await runGit(
@@ -82,7 +82,7 @@ describe("ensureIntegrationBranch", () => {
     expect(branchAfterCreate).toBe(branchBefore);
 
     const second = await ensureIntegrationBranch({ repoDir, runId: "run-1", baseRef: "main" });
-    expect(second.branchName).toBe("agentic/integration/run-1");
+    expect(second.branchName).toBe("cohort/integration/run-1");
     expect(second.created).toBe(false);
 
     // Still on the same branch/commit after the reuse call.

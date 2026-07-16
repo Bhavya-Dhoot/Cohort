@@ -1,6 +1,16 @@
 node_modules/
 dist/
 *.log
-.agentic-os/
+.cohort/
 coverage/
 scratch/
+# secrets & local env — never commit
+.env
+.env.*
+*.pem
+*.key
+# build/editor cruft
+*.tsbuildinfo
+.opencode/
+.DS_Store
+Thumbs.db

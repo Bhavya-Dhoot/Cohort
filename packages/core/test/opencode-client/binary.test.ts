@@ -56,7 +56,7 @@ const NODE_PREAMBLE_SHIM = (jsRelPath: string) =>
 let dir: string;
 
 beforeEach(async () => {
-  dir = join(tmpdir(), `agentic-os-binary-test-${randomBytes(6).toString("hex")}`);
+  dir = join(tmpdir(), `cohort-binary-test-${randomBytes(6).toString("hex")}`);
   await mkdir(dir, { recursive: true });
 });
 

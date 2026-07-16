@@ -19,7 +19,7 @@
 #
 # To pin an explicit model instead — for a specific task type, or globally —
 # override with a real "provider/model" string, either per project in
-# <project>/.agentic-os/config/models.yaml, or by editing this file, or by
+# <project>/.cohort/config/models.yaml, or by editing this file, or by
 # passing `model` explicitly to spawn_worker for a one-off call.
 
 routing:

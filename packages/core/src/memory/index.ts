@@ -6,7 +6,7 @@ import { atomicWriteJson } from "../lib/fs.js";
 
 /**
  * Shared project memory: a small set of named sections persisted as files
- * under a memory directory (conventionally `<project>/.agentic-os/memory/`
+ * under a memory directory (conventionally `<project>/.cohort/memory/`
  * -- `dir` is used as-is, this module does not append that suffix, matching
  * the rest of core where callers pass exact paths, e.g. `openEventLog`).
  *

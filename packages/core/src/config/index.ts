@@ -14,7 +14,7 @@ import {
 export type { OrchestratorConfig } from "./schema.js";
 
 /**
- * Loads and validates the five Agentic OS config files.
+ * Loads and validates the five Cohort config files.
  *
  * Each `<name>.yaml` is read from `defaultsDir` (all five are required
  * there). If `overridesDir` is given and contains a same-named file, it is

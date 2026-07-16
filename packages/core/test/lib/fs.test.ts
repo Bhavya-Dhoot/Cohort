@@ -8,7 +8,7 @@ import { atomicWriteJson, readJsonIfExists } from "../../src/lib/fs.js";
 let dir: string;
 
 beforeEach(() => {
-  dir = join(tmpdir(), `agentic-os-fs-test-${randomBytes(6).toString("hex")}`);
+  dir = join(tmpdir(), `cohort-fs-test-${randomBytes(6).toString("hex")}`);
 });
 
 afterEach(async () => {
