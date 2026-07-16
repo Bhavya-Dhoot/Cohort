@@ -1,6 +1,6 @@
 {
   "name": "@bhavya-dhoot/cohort",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Autonomous AI software-engineering organization for Claude Code + OpenCode",
   "keywords": [
     "ai-agents",
@@ -31,6 +31,10 @@
   "repository": {
     "type": "git",
     "url": "https://github.com/Bhavya-Dhoot/Cohort.git"
+  },
+  "homepage": "https://bhavya-dhoot.github.io/Cohort/",
+  "bugs": {
+    "url": "https://github.com/Bhavya-Dhoot/Cohort/issues"
   },
   "publishConfig": {
     "access": "public"

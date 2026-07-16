@@ -1,6 +1,6 @@
 {
   "name": "@bhavya-dhoot/cohort-core",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Core orchestration engine for Cohort: spawns and manages OpenCode implementation workers in isolated git worktrees, exposed as an MCP server",
   "keywords": [
     "ai-agents",
@@ -28,6 +28,10 @@
   "repository": {
     "type": "git",
     "url": "https://github.com/Bhavya-Dhoot/Cohort.git"
+  },
+  "homepage": "https://bhavya-dhoot.github.io/Cohort/",
+  "bugs": {
+    "url": "https://github.com/Bhavya-Dhoot/Cohort/issues"
   },
   "publishConfig": {
     "access": "public"
