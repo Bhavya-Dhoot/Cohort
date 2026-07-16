@@ -102,7 +102,14 @@ export const MemoryFileSchema = z.object({
   }),
   maxContextTokensPerHandoff: z.number().int().positive(),
   /** null means handoff context is passed through unsummarized. */
-  summarizationModel: z.string().nullable()
+  summarizationModel: z.string().nullable(),
+  /**
+   * Extension seam for `memory/index.ts`'s `openMemoryStore(dir, {sections})`
+   * option: additional section names a project wants the `memory` tool to
+   * accept beyond the built-in defaults, with no code change. Optional so
+   * existing configs without this key still validate.
+   */
+  sections: z.array(z.string()).optional()
 });
 export type MemoryFile = z.infer<typeof MemoryFileSchema>;
 

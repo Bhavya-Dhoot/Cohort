@@ -14,4 +14,5 @@ export * from "./worker/index.js";
 export * from "./plan/index.js";
 export * from "./specialist/index.js";
 export * from "./review/index.js";
+export * from "./report/index.js";
 export * from "./mcp/server.js";

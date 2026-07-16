@@ -47,7 +47,7 @@
  */
 
 import { randomBytes } from "node:crypto";
-import { mkdir, readdir, stat, writeFile } from "node:fs/promises";
+import { mkdir, readdir, rename, stat, writeFile } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { z } from "zod";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -103,6 +103,7 @@ import {
   type PermissionValue,
   type SpecialistSpec
 } from "../specialist/index.js";
+import { generateRunReport } from "../report/index.js";
 
 /**
  * Sentinel routing value (see `config/models.yaml`'s `routing.default`):
@@ -204,8 +205,12 @@ export async function createAgenticMcpServer(opts: CreateAgenticMcpServerOptions
   await taskStore.load();
 
   // Cross-run shared project memory: deliberately NOT under runDir (a fresh
-  // run must still see prior runs' mission/decision-log/etc).
-  const memory = openMemoryStore(join(stateRoot, "memory"));
+  // run must still see prior runs' mission/decision-log/etc). `sections`
+  // (config/schema.ts's MemoryFileSchema, extending memory/index.ts's own
+  // `OpenMemoryStoreOptions.sections`) lets a project declare extra section
+  // names in `.agentic-os/config/memory.yaml` so the `memory` tool accepts
+  // them with no code change here.
+  const memory = openMemoryStore(join(stateRoot, "memory"), { sections: config.memory.sections });
 
   // Reviewer verdict storage: like taskStore, scoped to this run
   // (<runDir>/reviews/) since a verdict is about work done within this run.
@@ -590,6 +595,22 @@ async function writeNextArtifact(ctx: ServerCtx, dir: string, prefix: string, da
     await atomicWriteJson(path, data);
     return path;
   });
+}
+
+/**
+ * Writes text to `filePath` atomically via a same-dir temp file + rename.
+ * `lib/fs.ts` only ships `atomicWriteJson` (which would wrap markdown in a
+ * JSON string literal), so `run_report`'s `report.md` needs this instead —
+ * mirrors `atomicWriteJson`'s temp+rename shape and `memory/index.ts`'s own
+ * (unexported) `atomicWriteText`, duplicated here rather than reaching across
+ * that module's boundary for an unexported helper.
+ */
+async function atomicWriteText(filePath: string, text: string): Promise<void> {
+  const dir = dirname(filePath);
+  await mkdir(dir, { recursive: true });
+  const tmpPath = join(dir, `${basename(filePath)}.${randomBytes(8).toString("hex")}.tmp`);
+  await writeFile(tmpPath, text, "utf8");
+  await rename(tmpPath, filePath);
 }
 
 /**
@@ -1123,6 +1144,24 @@ function registerTools(server: McpServer, ctx: ServerCtx): void {
       }
     },
     async (input) => runTool(ctx, "specialist", undefined, () => specialistHandler(ctx, input))
+  );
+
+  // -------------------------------------------------------------------------
+  // Observability
+  // -------------------------------------------------------------------------
+
+  server.registerTool(
+    "run_report",
+    {
+      title: "Run Report",
+      description:
+        "Generate this run's observability report (timeline, task graph, cost, failures) — call at the end of a " +
+        "run, or any time the human asks for status. Persists the report to <runDir>/report.md and returns it " +
+        "alongside a compact structured summary (task/worker/cost/review counts) for a quick read without parsing " +
+        "the markdown.",
+      inputSchema: {}
+    },
+    async () => runTool(ctx, "run_report", undefined, () => runReportHandler(ctx))
   );
 }
 
@@ -2136,4 +2175,23 @@ async function specialistHandler(ctx: ServerCtx, input: SpecialistToolInput): Pr
       return { payload: { specialists } };
     }
   }
+}
+
+// ---------------------------------------------------------------------------
+// Observability tool handler
+// ---------------------------------------------------------------------------
+
+/**
+ * `generateRunReport` (report/index.ts) reads this run's own on-disk state
+ * (task board, worker registry, cost.json, reviews/) under `ctx.runDir` and
+ * returns both the rendered markdown and a compact structured summary. The
+ * markdown is persisted to `<runDir>/report.md` via `atomicWriteText` (JSON
+ * would mangle it) and also returned whole, so the caller doesn't need a
+ * separate read to show it.
+ */
+async function runReportHandler(ctx: ServerCtx): Promise<ToolOutcome> {
+  const { markdown, summary } = await generateRunReport(ctx.runDir);
+  const reportPath = join(ctx.runDir, "report.md");
+  await atomicWriteText(reportPath, markdown);
+  return { payload: { summary, reportPath, markdown } };
 }
