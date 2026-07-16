@@ -2189,9 +2189,20 @@ async function specialistHandler(ctx: ServerCtx, input: SpecialistToolInput): Pr
  * would mangle it) and also returned whole, so the caller doesn't need a
  * separate read to show it.
  */
+
+/** Cap on the markdown returned inline in the tool payload; see `runReportHandler`. */
+const RUN_REPORT_INLINE_MARKDOWN_CAP = 64 * 1024;
+
 async function runReportHandler(ctx: ServerCtx): Promise<ToolOutcome> {
   const { markdown, summary } = await generateRunReport(ctx.runDir);
   const reportPath = join(ctx.runDir, "report.md");
   await atomicWriteText(reportPath, markdown);
-  return { payload: { summary, reportPath, markdown } };
+  // The full report is always on disk at `reportPath` regardless of size;
+  // this only caps what's echoed inline in the tool payload, so a very
+  // large run (many workers/tasks) doesn't blow up the MCP response.
+  const truncated = markdown.length > RUN_REPORT_INLINE_MARKDOWN_CAP;
+  const inlineMarkdown = truncated
+    ? `${markdown.slice(0, RUN_REPORT_INLINE_MARKDOWN_CAP)}\n\n_[truncated -- full report at ${reportPath}]_`
+    : markdown;
+  return { payload: { summary, reportPath, markdown: inlineMarkdown } };
 }

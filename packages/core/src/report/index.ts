@@ -6,7 +6,7 @@ import type { WorkerMeta, WorkerState } from "../worker/types.js";
 import type { TaskCard, TaskCardStatus } from "../tasks/schema.js";
 import type { Plan, ReplanRecord } from "../plan/schema.js";
 import type { BudgetSnapshot } from "../budget/index.js";
-import type { ReviewVerdict, ReviewVerdictOutcome } from "../review/schema.js";
+import { ReviewVerdictOutcomeSchema, type ReviewVerdict, type ReviewVerdictOutcome } from "../review/schema.js";
 
 /**
  * `generateRunReport(runDir)` renders a run's on-disk artifacts
@@ -86,7 +86,18 @@ async function readWorkers(runDir: string): Promise<WorkerMeta[]> {
   const metas: WorkerMeta[] = [];
   for (const id of ids) {
     const meta = await safeReadJson<WorkerMeta>(join(workersDir, id, "meta.json"));
-    if (meta && typeof meta.workerId === "string" && typeof meta.state === "string") {
+    // `createdAt`/`updatedAt` feed the gantt chart's date span and
+    // `buildSummary`'s Math.min/max duration calc -- a missing/non-numeric
+    // timestamp (hand-edited or partially-written meta.json) would otherwise
+    // produce an invalid mermaid date or a NaN duration, so drop the whole
+    // record here rather than let a bad timestamp propagate downstream.
+    if (
+      meta &&
+      typeof meta.workerId === "string" &&
+      typeof meta.state === "string" &&
+      Number.isFinite(meta.createdAt) &&
+      Number.isFinite(meta.updatedAt)
+    ) {
       metas.push(meta);
     }
   }
@@ -104,7 +115,7 @@ async function readReviews(runDir: string): Promise<Map<string, ReviewVerdict[]>
       (v) =>
         v &&
         typeof v.reviewerId === "string" &&
-        typeof v.verdict === "string" &&
+        ReviewVerdictOutcomeSchema.safeParse(v.verdict).success &&
         typeof v.at === "number"
     );
     if (valid.length > 0) map.set(taskId, valid);
@@ -310,7 +321,7 @@ function renderCostUsage(workers: WorkerMeta[], cost: BudgetSnapshot | undefined
     const workerCost = w.usage?.costUsd ?? cost?.perWorker?.[w.workerId]?.committedUsd ?? 0;
     const model = w.model ?? "_unknown_";
     lines.push(
-      `| ${escapeTableCell(w.workerId)} | ${escapeTableCell(w.taskId)} | ${escapeTableCell(model)} | ${w.state} | ${fmtUsd(workerCost)} |`
+      `| ${escapeTableCell(w.workerId)} | ${escapeTableCell(w.taskId)} | ${escapeTableCell(model)} | ${escapeTableCell(w.state)} | ${fmtUsd(workerCost)} |`
     );
     const bucket = perModel.get(model) ?? { count: 0, total: 0 };
     bucket.count += 1;
@@ -339,11 +350,11 @@ function renderReviews(reviewsByTask: Map<string, ReviewVerdict[]>): string {
     const verdicts = reviewsByTask.get(taskId)!;
     const latest = latestVerdictByReviewer(verdicts);
     const blocking = [...latest.values()].some((v) => isBlockingVerdict(v.verdict));
-    lines.push(`### Task ${taskId}${blocking ? " -- BLOCKING" : ""}`, "");
+    lines.push(`### Task ${escapeTableCell(taskId)}${blocking ? " -- BLOCKING" : ""}`, "");
     lines.push("| Reviewer | Verdict |", "|---|---|");
     for (const reviewerId of [...latest.keys()].sort()) {
       const v = latest.get(reviewerId)!;
-      lines.push(`| ${escapeTableCell(reviewerId)} | ${v.verdict} |`);
+      lines.push(`| ${escapeTableCell(reviewerId)} | ${escapeTableCell(v.verdict)} |`);
     }
     lines.push("");
   }
@@ -362,10 +373,10 @@ function renderFailureReport(workers: WorkerMeta[], replans: ReplanRecord[]): st
     return lines.join("\n");
   }
   for (const w of failing) {
-    lines.push(`### Worker ${w.workerId} (task ${w.taskId})`, "");
-    lines.push(`- **State:** ${w.state}`);
+    lines.push(`### Worker ${escapeTableCell(w.workerId)} (task ${escapeTableCell(w.taskId)})`, "");
+    lines.push(`- **State:** ${escapeTableCell(w.state)}`);
     if (w.lastError) {
-      lines.push(`- **Classification:** ${w.lastError.classification}`);
+      lines.push(`- **Classification:** ${escapeTableCell(w.lastError.classification)}`);
       lines.push(`- **Error:** ${escapeTableCell(w.lastError.message)}`);
     } else {
       lines.push("- **Classification:** _none recorded_");

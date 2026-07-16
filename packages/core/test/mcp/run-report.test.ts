@@ -243,6 +243,40 @@ describe("run_report", () => {
       await close();
     }
   });
+
+  it("caps a large report's inline markdown while keeping report.md on disk complete", async () => {
+    const client = createMockClient();
+    const { client: mcp, close } = await setupServer(client);
+    try {
+      const runId = await readRunId(projectDir);
+      const runDir = join(projectDir, ".agentic-os", "runs", runId);
+      await mkdir(runDir, { recursive: true });
+      // A huge objective alone is enough to push the rendered report well past
+      // the ~64KB inline cap, without spawning hundreds of real workers.
+      const hugeObjective = "x".repeat(200_000);
+      await writeFile(
+        join(runDir, "plan.json"),
+        JSON.stringify({ objective: hugeObjective, tasks: [] }),
+        "utf8"
+      );
+
+      const res = await callTool(mcp, "run_report", {});
+      expect(res.isError).toBeFalsy();
+
+      const INLINE_CAP = 64 * 1024;
+      const inlineMarkdown = res.data.markdown as string;
+      expect(inlineMarkdown.length).toBeLessThan(INLINE_CAP + 500);
+      expect(inlineMarkdown).toMatch(/truncated -- full report at/);
+      expect(res.data.summary).toBeDefined();
+      expect(res.data.reportPath).toBe(join(runDir, "report.md"));
+
+      const written = await readFile(res.data.reportPath as string, "utf8");
+      expect(written.length).toBeGreaterThan(INLINE_CAP);
+      expect(written).toContain(hugeObjective);
+    } finally {
+      await close();
+    }
+  });
 });
 
 // ---------------------------------------------------------------------------

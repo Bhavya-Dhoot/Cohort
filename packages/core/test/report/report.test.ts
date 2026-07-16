@@ -261,4 +261,127 @@ describe("generateRunReport", () => {
     expect(summary.workers.total).toBe(1);
     expect(summary.durationMs).toBe(1000);
   });
+
+  it("drops a worker meta with a non-numeric/missing createdAt, so the report still generates with no NaN/undefined", async () => {
+    const runDir = join(root, "run-bad-timestamp");
+    // One valid worker plus one with a corrupted createdAt (hand-edited/partial write).
+    await writeWorker(runDir, "w-ok", {
+      workerId: "w-ok",
+      runId: "run-bad-timestamp",
+      taskId: "T1",
+      state: "completed",
+      prompt: "do it",
+      createdAt: BASE,
+      updatedAt: BASE + 1000,
+      attempts: { infra: 0 }
+    } satisfies WorkerMeta);
+    await writeJson(join(runDir, "workers", "w-bad", "meta.json"), {
+      workerId: "w-bad",
+      runId: "run-bad-timestamp",
+      taskId: "T2",
+      state: "running",
+      prompt: "do it too",
+      createdAt: "not-a-number",
+      updatedAt: BASE + 2000,
+      attempts: { infra: 0 }
+    });
+    // Also missing updatedAt entirely.
+    await writeJson(join(runDir, "workers", "w-missing", "meta.json"), {
+      workerId: "w-missing",
+      runId: "run-bad-timestamp",
+      taskId: "T3",
+      state: "running",
+      prompt: "do it three",
+      createdAt: BASE,
+      attempts: { infra: 0 }
+    });
+
+    const { markdown, summary } = await generateRunReport(runDir);
+
+    // Only the valid worker survives.
+    expect(summary.workers.total).toBe(1);
+    expect(summary.workers.byState).toEqual({ completed: 1 });
+    expect(summary.durationMs).toBe(1000);
+
+    expect(markdown).not.toMatch(/NaN/);
+    expect(markdown).not.toMatch(/undefined/);
+    expect(markdown).not.toMatch(/Invalid Date/);
+    expect(markdown).toContain("w-ok");
+    expect(markdown).not.toContain("w-bad");
+    expect(markdown).not.toContain("w-missing");
+  });
+
+  it("escapes a worker state / review verdict containing a pipe or newline so tables aren't corrupted", async () => {
+    const runDir = join(root, "run-malicious-fields");
+    await writeWorker(runDir, "w-pipe", {
+      workerId: "w-pipe",
+      runId: "run-malicious-fields",
+      taskId: "T1",
+      // Cast through unknown: WorkerState is a closed union at the type
+      // level, but this simulates a hand-edited/corrupted meta.json where
+      // the on-disk value doesn't match the type.
+      state: "failed | evil\ninjected row" as unknown as WorkerMeta["state"],
+      prompt: "do it",
+      createdAt: BASE,
+      updatedAt: BASE + 1000,
+      attempts: { infra: 0 },
+      lastError: { message: "boom", classification: "logic" }
+    } satisfies WorkerMeta);
+
+    const goodVerdict: ReviewVerdict = {
+      taskId: "T1",
+      reviewerId: "security",
+      verdict: "pass",
+      findings: [],
+      at: BASE
+    };
+    await writeJson(join(runDir, "reviews", "T1", "security-0.json"), goodVerdict);
+
+    const { markdown } = await generateRunReport(runDir);
+
+    // The cost-usage table row for w-pipe must have exactly 5 columns (6 column
+    // separators). `escapeTableCell` turns the embedded `|` into `\|`, which
+    // still contains a literal `|` character -- so count only *unescaped*
+    // pipes (real separators) via a negative lookbehind, not raw `|` chars.
+    // Match the actual table row (starts with "| w-pipe |"), not the gantt
+    // timeline line above it, which also mentions "w-pipe" as its node id
+    // but is mermaid syntax, not a markdown table.
+    const costRow = markdown.split("\n").find((line) => /^\|\s*w-pipe\s*\|/.test(line));
+    expect(costRow).toBeDefined();
+    expect((costRow!.match(/(?<!\\)\|/g) ?? []).length).toBe(6);
+    expect(costRow).not.toContain("\n");
+
+    // The failure-report bullet for state is escaped too (no stray newline breaking list structure).
+    const stateBullet = markdown.split("\n").find((line) => line.startsWith("- **State:**"));
+    expect(stateBullet).toBeDefined();
+    expect(stateBullet).toContain("evil");
+  });
+
+  it("drops a review verdict with a corrupted (non-enum) value", async () => {
+    const runDir = join(root, "run-bad-verdict");
+    await writeWorker(runDir, "w1", {
+      workerId: "w1",
+      runId: "run-bad-verdict",
+      taskId: "T1",
+      state: "completed",
+      prompt: "do it",
+      createdAt: BASE,
+      updatedAt: BASE + 1000,
+      attempts: { infra: 0 }
+    } satisfies WorkerMeta);
+    // Corrupted verdict value -- not one of pass/revise/block.
+    await writeJson(join(runDir, "reviews", "T1", "security-0.json"), {
+      taskId: "T1",
+      reviewerId: "security",
+      verdict: "definitely-maybe",
+      findings: [],
+      at: BASE
+    });
+
+    const { markdown, summary } = await generateRunReport(runDir);
+
+    expect(summary.reviews).toEqual({ total: 0, blocking: 0 });
+    expect(markdown).toContain("## Reviews");
+    expect(markdown).toContain("_no data_");
+  });
 });
