@@ -6,7 +6,7 @@
     "packages/*"
   ],
   "scripts": {
-    "build": "tsc -b packages/core",
+    "build": "tsc -b packages/core && npm run build --workspace cohort",
     "test": "vitest run",
     "typecheck": "tsc --noEmit -p packages/core",
     "smoke": "node scripts/smoke.mjs",

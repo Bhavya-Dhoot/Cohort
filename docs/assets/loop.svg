@@ -1,0 +1,65 @@
+<svg viewBox="0 0 420 400" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="The Cohort loop: analyze, plan, generate org, batch spawn, verify, review, integrate, replan, then repeat">
+  <style>
+    .co-node { fill: #FBFBFA; stroke: #0F766E; stroke-width: 2; }
+    .co-arc { stroke: #0F766E; stroke-width: 1.8; fill: none; }
+    .co-label { fill: #57606A; font-family: "Geist Mono", "JetBrains Mono", "SF Mono", ui-monospace, monospace; font-size: 12; }
+    .co-num { fill: #57606A; font-family: "Geist Mono", "JetBrains Mono", "SF Mono", ui-monospace, monospace; font-size: 10; }
+    @media (prefers-color-scheme: dark) {
+      .co-node { fill: #141618; }
+      .co-label { fill: #B8BCC0; }
+      .co-num { fill: #B8BCC0; }
+    }
+  </style>
+
+  <defs>
+    <marker id="loop-arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#0F766E" />
+    </marker>
+  </defs>
+
+  <!-- 8 arcs around the circle (r=140, center 210,200), each connecting consecutive nodes, closing the loop -->
+  <path class="co-arc" d="M 210,60 A 140,140 0 0,1 309,101" marker-end="url(#loop-arrow)" />
+  <path class="co-arc" d="M 309,101 A 140,140 0 0,1 350,200" marker-end="url(#loop-arrow)" />
+  <path class="co-arc" d="M 350,200 A 140,140 0 0,1 309,299" marker-end="url(#loop-arrow)" />
+  <path class="co-arc" d="M 309,299 A 140,140 0 0,1 210,340" marker-end="url(#loop-arrow)" />
+  <path class="co-arc" d="M 210,340 A 140,140 0 0,1 111,299" marker-end="url(#loop-arrow)" />
+  <path class="co-arc" d="M 111,299 A 140,140 0 0,1 70,200" marker-end="url(#loop-arrow)" />
+  <path class="co-arc" d="M 70,200 A 140,140 0 0,1 111,101" marker-end="url(#loop-arrow)" />
+  <path class="co-arc" d="M 111,101 A 140,140 0 0,1 210,60" marker-end="url(#loop-arrow)" />
+
+  <!-- nodes -->
+  <circle class="co-node" cx="210" cy="60" r="9" />
+  <circle class="co-node" cx="309" cy="101" r="9" />
+  <circle class="co-node" cx="350" cy="200" r="9" />
+  <circle class="co-node" cx="309" cy="299" r="9" />
+  <circle class="co-node" cx="210" cy="340" r="9" />
+  <circle class="co-node" cx="111" cy="299" r="9" />
+  <circle class="co-node" cx="70" cy="200" r="9" />
+  <circle class="co-node" cx="111" cy="101" r="9" />
+
+  <!-- labels, offset outward from each node -->
+  <text class="co-num" x="210" y="30" text-anchor="middle">1</text>
+  <text class="co-label" x="210" y="44" text-anchor="middle">analyze</text>
+
+  <text class="co-num" x="345" y="70" text-anchor="start">2</text>
+  <text class="co-label" x="345" y="84" text-anchor="start">plan</text>
+
+  <text class="co-num" x="392" y="185" text-anchor="start">3</text>
+  <text class="co-label" x="392" y="199" text-anchor="start">generate org</text>
+  <text class="co-label" x="392" y="214" text-anchor="start">/ specialists</text>
+
+  <text class="co-num" x="345" y="335" text-anchor="start">4</text>
+  <text class="co-label" x="345" y="349" text-anchor="start">batch spawn</text>
+
+  <text class="co-num" x="210" y="368" text-anchor="middle">5</text>
+  <text class="co-label" x="210" y="382" text-anchor="middle">verify</text>
+
+  <text class="co-num" x="75" y="335" text-anchor="end">6</text>
+  <text class="co-label" x="75" y="349" text-anchor="end">review</text>
+
+  <text class="co-num" x="28" y="185" text-anchor="end">7</text>
+  <text class="co-label" x="28" y="199" text-anchor="end">integrate</text>
+
+  <text class="co-num" x="75" y="70" text-anchor="end">8</text>
+  <text class="co-label" x="75" y="84" text-anchor="end">replan</text>
+</svg>

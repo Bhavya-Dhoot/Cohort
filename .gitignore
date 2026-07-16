@@ -4,7 +4,11 @@ dist/
 .cohort/
 coverage/
 scratch/
-# secrets & local env — never commit
+# generated: mirrored into the published `cohort` package by
+# packages/cli/scripts/copy-assets.mjs; source of truth is config/ and
+# packages/plugin/{skills,agents}
+packages/cli/vendor/
+# secrets and local env: never commit
 .env
 .env.*
 *.pem

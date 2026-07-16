@@ -1,0 +1,46 @@
+{
+  "name": "cohort",
+  "version": "0.1.0",
+  "description": "Autonomous AI software-engineering organization for Claude Code + OpenCode",
+  "keywords": [
+    "ai-agents",
+    "autonomous-agents",
+    "claude-code",
+    "opencode",
+    "multi-agent",
+    "ai-software-engineer",
+    "orchestration",
+    "code-review",
+    "developer-tools",
+    "mcp"
+  ],
+  "license": "MIT",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "bin": {
+    "cohort": "./bin/cohort.mjs",
+    "cohort-mcp": "./bin/cohort-mcp.mjs"
+  },
+  "files": [
+    "bin",
+    "src",
+    "vendor"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/OWNER/cohort.git"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "node scripts/copy-assets.mjs",
+    "prepack": "npm run build",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@cohort/core": "^0.1.0"
+  }
+}

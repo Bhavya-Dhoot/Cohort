@@ -1,0 +1,784 @@
+<title>Cohort: Autonomous AI Software-Engineering Organization for Claude Code + OpenCode</title>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="description" content="Cohort turns one objective into a dynamic AI engineering org: parallel specialists in isolated git worktrees, dedicated read-only reviewers, and a continuous plan, review, integrate loop. An autonomous AI software-engineering organization for Claude Code and OpenCode.">
+<meta name="color-scheme" content="light dark">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 48 40'%3E%3Ccircle cx='24' cy='32' r='5' fill='%230F766E'/%3E%3Cg fill='none' stroke='%23787774' stroke-width='1.6'%3E%3Cline x1='24' y1='32' x2='6' y2='16'/%3E%3Cline x1='24' y1='32' x2='15' y2='7'/%3E%3Cline x1='24' y1='32' x2='24' y2='4'/%3E%3Cline x1='24' y1='32' x2='33' y2='7'/%3E%3Cline x1='24' y1='32' x2='42' y2='16'/%3E%3C/g%3E%3Cg fill='%23FBFBFA' stroke='%23787774' stroke-width='1.6'%3E%3Ccircle cx='6' cy='16' r='3'/%3E%3Ccircle cx='15' cy='7' r='3'/%3E%3Ccircle cx='24' cy='4' r='3'/%3E%3Ccircle cx='33' cy='7' r='3'/%3E%3Ccircle cx='42' cy='16' r='3'/%3E%3C/g%3E%3C/svg%3E">
+<style>
+  :root {
+    --canvas: #FBFBFA;
+    --surface: #F7F6F3;
+    --heading: #1A1A1A;
+    --body: #2F3437;
+    --muted: #787774;
+    --border: #EAEAEA;
+    --accent: #0F766E;
+    --accent-tint: #EEF6F5;
+    --cta-bg: #111111;
+    --cta-text: #FFFFFF;
+    --radius-card: 10px;
+    --radius-btn: 6px;
+    --font-display: "Geist", "SF Pro Display", "Helvetica Neue", system-ui, sans-serif;
+    --font-mono: "Geist Mono", "JetBrains Mono", "SF Mono", ui-monospace, monospace;
+    color-scheme: light;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --canvas: #0C0D0E;
+      --surface: #141618;
+      --heading: #ECECEC;
+      --body: #D4D6D8;
+      --muted: #B8BCC0;
+      --border: rgba(255, 255, 255, 0.08);
+      --accent: #2DD4BF;
+      --accent-tint: rgba(45, 212, 191, 0.08);
+      --cta-bg: #FAFAFA;
+      --cta-text: #111111;
+      color-scheme: dark;
+    }
+  }
+
+  :root[data-theme="dark"] {
+    --canvas: #0C0D0E;
+    --surface: #141618;
+    --heading: #ECECEC;
+    --body: #D4D6D8;
+    --muted: #B8BCC0;
+    --border: rgba(255, 255, 255, 0.08);
+    --accent: #2DD4BF;
+    --accent-tint: rgba(45, 212, 191, 0.08);
+    --cta-bg: #FAFAFA;
+    --cta-text: #111111;
+    color-scheme: dark;
+  }
+
+  :root[data-theme="light"] {
+    --canvas: #FBFBFA;
+    --surface: #F7F6F3;
+    --heading: #1A1A1A;
+    --body: #2F3437;
+    --muted: #787774;
+    --border: #EAEAEA;
+    --accent: #0F766E;
+    --accent-tint: #EEF6F5;
+    --cta-bg: #111111;
+    --cta-text: #FFFFFF;
+    color-scheme: light;
+  }
+
+  * { box-sizing: border-box; }
+
+  html { scroll-behavior: smooth; }
+
+  body {
+    margin: 0;
+    background: var(--canvas);
+    color: var(--body);
+    font-family: var(--font-display);
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  a { color: inherit; }
+
+  .container {
+    max-width: 1120px;
+    margin: 0 auto;
+    padding-inline: 24px;
+  }
+
+  /* ---------- nav ---------- */
+
+  .nav {
+    position: sticky;
+    top: 0;
+    z-index: 20;
+    height: 72px;
+    display: flex;
+    align-items: center;
+    background: color-mix(in srgb, var(--canvas) 88%, transparent);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    border-bottom: 1px solid var(--border);
+  }
+
+  .nav-inner {
+    width: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+  }
+
+  .wordmark {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    text-decoration: none;
+    color: var(--heading);
+    font-weight: 600;
+    font-size: 1.05rem;
+    letter-spacing: -0.02em;
+  }
+
+  .wordmark svg { display: block; }
+
+  .nav-links {
+    display: flex;
+    align-items: center;
+    gap: 24px;
+  }
+
+  .nav-links a {
+    text-decoration: none;
+    color: var(--body);
+    font-size: 0.9rem;
+    font-family: var(--font-mono);
+  }
+
+  .nav-links a:hover { color: var(--accent); }
+
+  .theme-toggle {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 32px;
+    height: 32px;
+    padding: 0;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-btn);
+    background: transparent;
+    color: var(--body);
+    cursor: pointer;
+  }
+
+  .theme-toggle:hover { border-color: var(--accent); color: var(--accent); }
+
+  .theme-toggle .icon-moon { display: none; }
+  :root[data-theme="dark"] .theme-toggle .icon-sun { display: none; }
+  :root[data-theme="dark"] .theme-toggle .icon-moon { display: block; }
+
+  @media (prefers-color-scheme: dark) {
+    .theme-toggle .icon-sun { display: none; }
+    .theme-toggle .icon-moon { display: block; }
+    :root[data-theme="light"] .theme-toggle .icon-sun { display: block; }
+    :root[data-theme="light"] .theme-toggle .icon-moon { display: none; }
+  }
+
+  /* ---------- hero ---------- */
+
+  .hero {
+    min-height: calc(100vh - 72px);
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    padding-block: 48px 96px;
+  }
+
+  .hero-mark {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    margin: 0 0 28px;
+  }
+
+  .hero-mark svg { display: block; width: 44px; height: 37px; }
+
+  .hero h1 {
+    margin: 0;
+    font-size: clamp(2.75rem, 6vw, 4.5rem);
+    line-height: 1.05;
+    letter-spacing: -0.02em;
+    font-weight: 600;
+    color: var(--heading);
+  }
+
+  .value-prop {
+    margin: 28px 0 40px;
+    max-width: 62ch;
+    font-size: clamp(1.05rem, 2vw, 1.25rem);
+    color: var(--body);
+  }
+
+  .hero-actions {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 20px;
+  }
+
+  .cta-primary {
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    padding: 12px 18px;
+    background: var(--cta-bg);
+    color: var(--cta-text);
+    border: none;
+    border-radius: var(--radius-btn);
+    font-family: var(--font-mono);
+    font-size: 0.95rem;
+    cursor: pointer;
+    line-height: 1;
+  }
+
+  .cta-primary .chip-prompt { opacity: 0.5; }
+
+  .cta-primary .icon-copy,
+  .cta-primary .icon-check { display: block; }
+  .cta-primary .icon-check { display: none; }
+  .cta-primary.copied .icon-copy { display: none; }
+  .cta-primary.copied .icon-check { display: block; }
+
+  .cta-secondary {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    text-decoration: none;
+    color: var(--body);
+    font-size: 0.95rem;
+    border-bottom: 1px solid var(--border);
+    padding-bottom: 2px;
+  }
+
+  .cta-secondary:hover { color: var(--accent); border-color: var(--accent); }
+
+  /* ---------- reveal motion ---------- */
+
+  [data-reveal] {
+    opacity: 0;
+    transform: translateY(12px);
+    transition: opacity 0.6s cubic-bezier(0.16, 1, 0.3, 1), transform 0.6s cubic-bezier(0.16, 1, 0.3, 1);
+    transition-delay: calc(var(--d, 0) * 70ms);
+  }
+
+  [data-reveal].is-visible { opacity: 1; transform: none; }
+
+  @media (prefers-reduced-motion: reduce) {
+    [data-reveal] { transition: none; opacity: 1; transform: none; }
+  }
+
+  /* ---------- section shell ---------- */
+
+  section { padding-block: 88px; border-top: 1px solid var(--border); }
+
+  .section-head { max-width: 56ch; margin-bottom: 56px; }
+
+  .section-head h2 {
+    margin: 0 0 12px;
+    font-size: clamp(1.6rem, 3vw, 2.25rem);
+    letter-spacing: -0.02em;
+    color: var(--heading);
+    font-weight: 600;
+  }
+
+  .section-head p { margin: 0; color: var(--muted); font-size: 1rem; }
+
+  /* ---------- how it works ---------- */
+
+  .loop-steps { position: relative; max-width: 760px; }
+
+  .loop-steps::before {
+    content: "";
+    position: absolute;
+    left: 23px;
+    top: 8px;
+    bottom: 8px;
+    width: 1px;
+    background: var(--border);
+  }
+
+  .loop-step {
+    position: relative;
+    display: grid;
+    grid-template-columns: 48px 1fr;
+    gap: 20px;
+    padding-block: 22px;
+  }
+
+  .loop-step:first-child { padding-top: 0; }
+  .loop-step:last-child { padding-bottom: 0; }
+
+  .loop-step .idx {
+    position: relative;
+    z-index: 1;
+    width: 48px;
+    height: 48px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-family: var(--font-mono);
+    font-size: 0.8rem;
+    color: var(--accent);
+    background: var(--canvas);
+    border: 1px solid var(--border);
+    border-radius: 999px;
+  }
+
+  .loop-step h3 {
+    margin: 6px 0 6px;
+    font-size: 1.1rem;
+    color: var(--heading);
+    font-weight: 600;
+  }
+
+  .loop-step p { margin: 0; color: var(--muted); max-width: 52ch; }
+
+  .loop-step:nth-child(odd) .step-body { margin-left: 0; }
+  .loop-step:nth-child(even) .step-body { margin-left: 32px; }
+
+  /* ---------- capabilities bento ---------- */
+
+  .bento {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 1px;
+    background: var(--border);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-card);
+    overflow: hidden;
+  }
+
+  .bento .card {
+    background: var(--canvas);
+    padding: 32px;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+  }
+
+  .bento .card.span-2 { grid-column: span 2; }
+  .bento .card.accent { background: var(--accent-tint); }
+
+  .card-icon { color: var(--muted); }
+  .card-icon svg { display: block; }
+
+  .bento .card h3 {
+    margin: 0;
+    font-size: 1.05rem;
+    color: var(--heading);
+    font-weight: 600;
+  }
+
+  .bento .card p { margin: 0; color: var(--muted); font-size: 0.95rem; }
+
+  /* ---------- quickstart ---------- */
+
+  .terminal {
+    max-width: 720px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-card);
+    overflow: hidden;
+    background: var(--surface);
+  }
+
+  .terminal-bar {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .terminal-bar span {
+    width: 9px;
+    height: 9px;
+    border-radius: 999px;
+    display: inline-block;
+  }
+
+  .terminal-bar span:nth-child(1) { background: #E3A9A6; }
+  .terminal-bar span:nth-child(2) { background: #E8CE9B; }
+  .terminal-bar span:nth-child(3) { background: #A6C9AF; }
+
+  @media (prefers-color-scheme: dark) {
+    .terminal-bar span:nth-child(1) { background: #6B4B49; }
+    .terminal-bar span:nth-child(2) { background: #6B5E42; }
+    .terminal-bar span:nth-child(3) { background: #43584A; }
+  }
+
+  .terminal-body { padding: 22px 24px; font-family: var(--font-mono); font-size: 0.9rem; }
+
+  .terminal-line { display: flex; gap: 10px; padding-block: 5px; color: var(--body); }
+  .terminal-line .prompt { color: var(--muted); user-select: none; }
+  .terminal-line .cmd { color: var(--heading); }
+  .terminal-line.comment { color: var(--muted); }
+  .terminal-line.comment .prompt { visibility: hidden; }
+
+  /* ---------- proof ---------- */
+
+  .proof-grid {
+    display: grid;
+    grid-template-columns: 1.1fr 0.9fr;
+    gap: 56px;
+    align-items: start;
+  }
+
+  .proof-narrative p { margin: 0 0 16px; color: var(--body); max-width: 58ch; }
+  .proof-narrative p:last-child { margin-bottom: 0; }
+
+  .proof-narrative .lede { color: var(--heading); font-size: 1.05rem; }
+
+  .doc-link {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    margin-top: 20px;
+    text-decoration: none;
+    color: var(--accent);
+    font-family: var(--font-mono);
+    font-size: 0.9rem;
+    border-bottom: 1px solid transparent;
+  }
+
+  .doc-link:hover { border-color: var(--accent); }
+
+  .stat-table {
+    border: 1px solid var(--border);
+    border-radius: var(--radius-card);
+    overflow: hidden;
+  }
+
+  .stat-row {
+    display: flex;
+    justify-content: space-between;
+    gap: 16px;
+    padding: 16px 20px;
+    border-bottom: 1px solid var(--border);
+    font-size: 0.92rem;
+  }
+
+  .stat-row:last-child { border-bottom: none; }
+  .stat-row .label { color: var(--muted); }
+  .stat-row .value { color: var(--heading); font-family: var(--font-mono); text-align: right; }
+  .stat-row .value.accent { color: var(--accent); }
+
+  /* ---------- footer ---------- */
+
+  footer {
+    border-top: 1px solid var(--border);
+    padding-block: 40px;
+  }
+
+  .footer-inner {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: space-between;
+    align-items: center;
+    gap: 16px;
+  }
+
+  .footer-inner p {
+    margin: 0;
+    color: var(--muted);
+    font-size: 0.85rem;
+  }
+
+  .footer-links { display: flex; gap: 20px; }
+  .footer-links a { text-decoration: none; color: var(--muted); font-size: 0.85rem; font-family: var(--font-mono); }
+  .footer-links a:hover { color: var(--accent); }
+
+  /* ---------- responsive ---------- */
+
+  @media (max-width: 768px) {
+    .container { padding-inline: 20px; }
+    .nav-links { gap: 14px; }
+    section { padding-block: 64px; }
+    .loop-step:nth-child(even) .step-body { margin-left: 0; }
+    .bento { grid-template-columns: 1fr; }
+    .bento .card.span-2 { grid-column: span 1; }
+    .proof-grid { grid-template-columns: 1fr; gap: 36px; }
+  }
+
+  @media (max-width: 480px) {
+    .nav-links { gap: 10px; }
+    .nav-links a { font-size: 0.8rem; }
+    .hero { padding-block: 32px 64px; }
+  }
+</style>
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <symbol id="cohort-mark" viewBox="0 0 48 40">
+      <g fill="none" stroke="currentColor" stroke-width="1.6">
+        <line x1="24" y1="32" x2="6" y2="16"></line>
+        <line x1="24" y1="32" x2="15" y2="7"></line>
+        <line x1="24" y1="32" x2="24" y2="4"></line>
+        <line x1="24" y1="32" x2="33" y2="7"></line>
+        <line x1="24" y1="32" x2="42" y2="16"></line>
+      </g>
+      <g fill="var(--canvas)" stroke="currentColor" stroke-width="1.6">
+        <circle cx="6" cy="16" r="3"></circle>
+        <circle cx="15" cy="7" r="3"></circle>
+        <circle cx="24" cy="4" r="3"></circle>
+        <circle cx="33" cy="7" r="3"></circle>
+        <circle cx="42" cy="16" r="3"></circle>
+      </g>
+      <circle cx="24" cy="32" r="5.5" fill="var(--accent)"></circle>
+    </symbol>
+  </defs>
+</svg>
+
+<nav class="nav">
+  <div class="nav-inner container">
+    <a class="wordmark" href="#top" aria-label="Cohort home">
+      <svg width="26" height="22"><use href="#cohort-mark"></use></svg>
+      <span>cohort</span>
+    </a>
+    <div class="nav-links">
+      <a href="ARCHITECTURE.md">Docs</a>
+      <a href="https://github.com/OWNER/cohort">GitHub</a>
+      <a href="https://www.npmjs.com/package/cohort">npm</a>
+      <button class="theme-toggle" id="theme-toggle" aria-label="Toggle color theme" aria-pressed="false">
+        <svg class="icon-sun" width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4">
+          <circle cx="8" cy="8" r="3"></circle>
+          <path d="M8 0.5v2M8 13.5v2M15.5 8h-2M2.5 8h-2M13.4 2.6l-1.4 1.4M4 12l-1.4 1.4M13.4 13.4L12 12M4 4 2.6 2.6"></path>
+        </svg>
+        <svg class="icon-moon" width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4">
+          <path d="M13.5 9.5A6 6 0 0 1 6.5 2.5 6 6 0 1 0 13.5 9.5Z"></path>
+        </svg>
+      </button>
+    </div>
+  </div>
+</nav>
+
+<main id="top">
+  <header class="hero container">
+    <div class="hero-mark">
+      <svg viewBox="0 0 48 40"><use href="#cohort-mark"></use></svg>
+    </div>
+    <h1>Cohort</h1>
+    <p class="value-prop">One objective in. Cohort builds the org, runs specialists in parallel, reviews their work, and ships what passes.</p>
+    <div class="hero-actions">
+      <button class="cta-primary" id="copy-install" data-copy="npm i -g cohort" aria-label="Copy install command: npm install global cohort">
+        <span class="chip-prompt">$</span>
+        <span class="chip-cmd">npm i -g cohort</span>
+        <svg class="icon-copy" width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.3"><rect x="4.5" y="4.5" width="8" height="8" rx="1.5"></rect><path d="M2.5 9.5V2.5a1 1 0 0 1 1-1H9"></path></svg>
+        <svg class="icon-check" width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M2.5 7.5 5.5 10.5 11.5 3.5"></path></svg>
+      </button>
+      <a class="cta-secondary" href="#proof">View the live run
+        <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M2.5 6h7M6.5 2.5 10 6l-3.5 3.5"></path></svg>
+      </a>
+    </div>
+  </header>
+
+  <section id="how" class="container">
+    <div class="section-head" data-reveal style="--d:0">
+      <h2>How it works</h2>
+      <p>The loop that runs every objective, from a plain-language ask to merged, reviewed code.</p>
+    </div>
+    <div class="loop-steps">
+      <div class="loop-step" data-reveal style="--d:1">
+        <div class="idx">01</div>
+        <div class="step-body">
+          <h3>Analyze and plan</h3>
+          <p>Turn the objective into a task graph and a concrete execution plan.</p>
+        </div>
+      </div>
+      <div class="loop-step" data-reveal style="--d:2">
+        <div class="idx">02</div>
+        <div class="step-body">
+          <h3>Generate the org</h3>
+          <p>Build a domain-specific chart of leads and specialists for this objective, not a template pulled off a shelf.</p>
+        </div>
+      </div>
+      <div class="loop-step" data-reveal style="--d:3">
+        <div class="idx">03</div>
+        <div class="step-body">
+          <h3>Spawn parallel workers</h3>
+          <p>Each specialist runs as an isolated OpenCode worker in its own git worktree, owning a disjoint set of files.</p>
+        </div>
+      </div>
+      <div class="loop-step" data-reveal style="--d:4">
+        <div class="idx">04</div>
+        <div class="step-body">
+          <h3>Review</h3>
+          <p>Dedicated read-only reviewers, assigned by the org chart, gate every diff before it can merge.</p>
+        </div>
+      </div>
+      <div class="loop-step" data-reveal style="--d:5">
+        <div class="idx">05</div>
+        <div class="step-body">
+          <h3>Integrate and replan</h3>
+          <p>Passing work merges to the integration branch. Blocked work is recorded and folded into the next batch.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section id="capabilities" class="container">
+    <div class="section-head" data-reveal style="--d:0">
+      <h2>Capabilities</h2>
+      <p>Fifteen capabilities, built and proven end to end. Six that show up first.</p>
+    </div>
+    <div class="bento">
+      <div class="card span-2" data-reveal style="--d:1">
+        <div class="card-icon">
+          <svg width="30" height="26" viewBox="0 0 30 26" fill="none">
+            <g stroke="currentColor" stroke-width="1.4"><line x1="15" y1="20" x2="4" y2="9"></line><line x1="15" y1="20" x2="15" y2="3"></line><line x1="15" y1="20" x2="26" y2="9"></line></g>
+            <g fill="var(--canvas)" stroke="currentColor" stroke-width="1.4"><circle cx="4" cy="9" r="2.2"></circle><circle cx="15" cy="3" r="2.2"></circle><circle cx="26" cy="9" r="2.2"></circle></g>
+            <circle cx="15" cy="20" r="3.4" fill="var(--accent)"></circle>
+          </svg>
+        </div>
+        <h3>Dynamic org generation</h3>
+        <p>Every run gets its own chart: CEO, engineering manager, domain leads, and specialists, sized to the objective. Nothing hardcoded, nothing reused between runs.</p>
+      </div>
+      <div class="card" data-reveal style="--d:2">
+        <div class="card-icon">
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4">
+            <path d="M6 4v16M12 4v16M18 4v16"></path>
+          </svg>
+        </div>
+        <h3>Parallel isolated workers</h3>
+        <p>Each specialist runs in its own git worktree, owning disjoint files so batches execute concurrently, conflict-free.</p>
+      </div>
+      <div class="card" data-reveal style="--d:3">
+        <div class="card-icon">
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4">
+            <ellipse cx="12" cy="12" rx="9" ry="5.5"></ellipse>
+            <circle cx="12" cy="12" r="2.4" fill="var(--accent)" stroke="none"></circle>
+          </svg>
+        </div>
+        <h3>Dedicated reviewers</h3>
+        <p>Read-only reviewer agents, assigned by the org chart, gate every diff. Blocking is a real verdict, not a rubber stamp.</p>
+      </div>
+      <div class="card accent" data-reveal style="--d:4">
+        <div class="card-icon">
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4">
+            <path d="M20 8a8 8 0 1 0 1.5 6"></path>
+            <path d="M20 3v5h-5"></path>
+          </svg>
+        </div>
+        <h3>Replan loop</h3>
+        <p>Blocked or failed work is recorded and folded back into the next batch instead of forcing a merge past a real defect.</p>
+      </div>
+      <div class="card" data-reveal style="--d:5">
+        <div class="card-icon">
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4">
+            <path d="M4 20V13M12 20V6M20 20v-9"></path>
+          </svg>
+        </div>
+        <h3>Observability</h3>
+        <p>One report per run: execution timeline, task DAG, per-model cost, and a failure breakdown, generated from on-disk artifacts.</p>
+      </div>
+      <div class="card span-2" data-reveal style="--d:6">
+        <div class="card-icon">
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4">
+            <circle cx="12" cy="12" r="8.5"></circle>
+            <path d="M12 8v8M8 12h8"></path>
+          </svg>
+        </div>
+        <h3>Extensible without touching core</h3>
+        <p>Custom check suites, memory sections, specialists, and worker backends plug in through config or a markdown agent file. No core edits, no eval of user code.</p>
+      </div>
+    </div>
+  </section>
+
+  <section id="quickstart" class="container">
+    <div class="section-head" data-reveal style="--d:0">
+      <h2>Quickstart</h2>
+      <p>Install, authenticate once, scaffold a project, and hand it an objective.</p>
+    </div>
+    <div class="terminal" data-reveal style="--d:1">
+      <div class="terminal-bar">
+        <span></span><span></span><span></span>
+      </div>
+      <div class="terminal-body">
+        <div class="terminal-line"><span class="prompt">$</span><span class="cmd">npm i -g cohort</span></div>
+        <div class="terminal-line"><span class="prompt">$</span><span class="cmd">cohort login</span></div>
+        <div class="terminal-line comment"><span class="prompt">$</span><span>verifies Claude, OpenCode, and provider auth. never stores secrets.</span></div>
+        <div class="terminal-line"><span class="prompt">$</span><span class="cmd">cohort init</span></div>
+        <div class="terminal-line comment"><span class="prompt">$</span><span>scaffolds .cohort/ and registers the Claude Code plugin.</span></div>
+        <div class="terminal-line"><span class="prompt">$</span><span class="cmd">cohort run "Build a small Node utility library: a config loader, an input validator, and a health-check handler."</span></div>
+      </div>
+    </div>
+  </section>
+
+  <section id="proof" class="container">
+    <div class="section-head" data-reveal style="--d:0">
+      <h2>A real run, at $0</h2>
+      <p>Not a hermetic test. Claude as orchestrator, real MCP tools, real OpenCode workers, against a fresh throwaway project.</p>
+    </div>
+    <div class="proof-grid">
+      <div class="proof-narrative" data-reveal style="--d:1">
+        <p class="lede">The orchestrator turned one objective into a real org: a CEO, an engineering manager, three domain leads, three specialists, reviewers, and an integration step.</p>
+        <p>Three OpenCode workers ran in parallel, each isolated in its own git worktree, each owning exactly one file. Three live reviewer agents then read the real diffs, and caught a genuine bug: two of the three modules came back as ESM in a CommonJS project, unloadable under <code>require()</code>. The reviewers blocked both and passed the one clean module.</p>
+        <p>The gate held. The two blocked modules were replanned instead of force-merged, and <code>run_report</code> rendered the observability report below straight from the run's on-disk artifacts.</p>
+        <a class="doc-link" href="DEMO-RUN.md">Read the full run
+          <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M2.5 6h7M6.5 2.5 10 6l-3.5 3.5"></path></svg>
+        </a>
+      </div>
+      <div class="stat-table" data-reveal style="--d:2">
+        <div class="stat-row"><span class="label">Tasks (total/done/failed/pending)</span><span class="value">3 / 1 / 0 / 2</span></div>
+        <div class="stat-row"><span class="label">Workers (total/merged/failed)</span><span class="value">3 / 0 / 0</span></div>
+        <div class="stat-row"><span class="label">Reviews (total/blocking)</span><span class="value">6 / 2</span></div>
+        <div class="stat-row"><span class="label">Duration</span><span class="value">8m 57s</span></div>
+        <div class="stat-row"><span class="label">Committed cost</span><span class="value accent">$0.0000</span></div>
+        <div class="stat-row"><span class="label">Platform</span><span class="value">18 tools · 350+ tests</span></div>
+      </div>
+    </div>
+  </section>
+</main>
+
+<footer class="container">
+  <div class="footer-inner">
+    <p>An autonomous AI software-engineering organization for Claude Code and OpenCode.</p>
+    <div class="footer-links">
+      <a href="https://github.com/OWNER/cohort">GitHub</a>
+      <a href="https://github.com/OWNER/cohort/blob/main/LICENSE">MIT License</a>
+      <span style="color:var(--muted); font-family: var(--font-mono); font-size: 0.85rem;">Built with Claude Code + OpenCode</span>
+    </div>
+  </div>
+</footer>
+
+<script>
+  (function () {
+    var root = document.documentElement;
+    var stored = null;
+    try { stored = localStorage.getItem('cohort-theme'); } catch (e) {}
+    if (stored === 'dark' || stored === 'light') root.setAttribute('data-theme', stored);
+
+    var toggle = document.getElementById('theme-toggle');
+    toggle.addEventListener('click', function () {
+      var systemDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+      var current = root.getAttribute('data-theme') || (systemDark ? 'dark' : 'light');
+      var next = current === 'dark' ? 'light' : 'dark';
+      root.setAttribute('data-theme', next);
+      toggle.setAttribute('aria-pressed', String(next === 'dark'));
+      try { localStorage.setItem('cohort-theme', next); } catch (e) {}
+    });
+  })();
+
+  (function () {
+    var btn = document.getElementById('copy-install');
+    btn.addEventListener('click', function () {
+      var text = btn.getAttribute('data-copy');
+      var done = function () {
+        btn.classList.add('copied');
+        setTimeout(function () { btn.classList.remove('copied'); }, 1500);
+      };
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(text).then(done, function () {});
+      }
+    });
+  })();
+
+  (function () {
+    var reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    var items = document.querySelectorAll('[data-reveal]');
+    if (reduceMotion || !('IntersectionObserver' in window)) {
+      items.forEach(function (el) { el.classList.add('is-visible'); });
+      return;
+    }
+    var io = new IntersectionObserver(function (entries) {
+      entries.forEach(function (entry) {
+        if (entry.isIntersecting) {
+          entry.target.classList.add('is-visible');
+          io.unobserve(entry.target);
+        }
+      });
+    }, { threshold: 0.15 });
+    items.forEach(function (el) { io.observe(el); });
+  })();
+</script>

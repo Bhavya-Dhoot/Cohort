@@ -1,14 +1,40 @@
 {
   "name": "@cohort/core",
   "version": "0.1.0",
-  "private": true,
+  "description": "Core orchestration engine for Cohort: spawns and manages OpenCode implementation workers in isolated git worktrees, exposed as an MCP server",
+  "keywords": [
+    "ai-agents",
+    "autonomous-agents",
+    "claude-code",
+    "opencode",
+    "multi-agent",
+    "orchestration",
+    "mcp"
+  ],
+  "license": "MIT",
   "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
   "main": "./dist/index.js",
   "exports": {
-    ".": "./dist/index.js"
+    ".": "./dist/index.js",
+    "./mcp/bin.js": "./dist/mcp/bin.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/OWNER/cohort.git"
+  },
+  "publishConfig": {
+    "access": "public"
   },
   "scripts": {
     "build": "tsc -b .",
+    "prepublishOnly": "npm run build",
     "test": "vitest run"
   },
   "dependencies": {
