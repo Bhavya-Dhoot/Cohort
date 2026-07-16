@@ -1,10 +1,11 @@
-<svg viewBox="0 0 720 460" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Animated diagram: a central orchestrator node draws connecting lines out to four specialist nodes and one reviewer node, which fade and scale in one at a time, followed by a review pulse and an integrate beat, then the organization holds fully assembled before the cycle repeats">
+<svg viewBox="0 0 720 460" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Animated diagram: a central orchestrator draws lines out to four numbered specialist nodes and one dashed reviewer node, which assemble once and stay in place while teal pulses show work being dispatched, reviewed, and integrated in a continuous loop">
   <style>
-    .co-line { stroke: #8A8F98; stroke-width: 2; fill: none; }
+    .co-line { stroke: #8A8F98; stroke-width: 2; fill: none; stroke-dasharray: 155; }
     .co-node-fill { fill: #FBFBFA; }
     .co-node-stroke { stroke: #8A8F98; stroke-width: 1.8; fill: none; }
     .co-node-stroke-dashed { stroke: #8A8F98; stroke-width: 1.8; fill: none; stroke-dasharray: 3 3; }
     .co-hub { fill: #0F766E; }
+    .co-dispatch { stroke: #0F766E; stroke-width: 2; fill: none; stroke-dasharray: 26 129; }
     .co-pulse { stroke: #0F766E; stroke-width: 1.6; fill: none; }
     .co-num { fill: #5B6470; font-family: "Geist Mono", "JetBrains Mono", "SF Mono", ui-monospace, monospace; font-size: 14px; }
     .co-cap { fill: #5B6470; font-family: "Geist Mono", "JetBrains Mono", "SF Mono", ui-monospace, monospace; font-size: 12px; letter-spacing: 0.02em; }
@@ -13,88 +14,130 @@
       .co-num { fill: #B8BCC0; }
       .co-cap { fill: #B8BCC0; }
       .co-hub { fill: #2DD4BF; }
+      .co-dispatch { stroke: #2DD4BF; }
       .co-pulse { stroke: #2DD4BF; }
     }
 
-    .ln { transform-box: fill-box; transform-origin: 0 0; }
-    .nd { transform-box: fill-box; transform-origin: center; }
-    .hub-g { transform-box: fill-box; transform-origin: center; animation: beat 12s ease-in-out infinite; }
-    .pulse-g { transform-box: fill-box; transform-origin: center; animation: pulse 12s ease-in-out infinite; }
+    /* rule: static outer group with the transform attribute for position, plain inner group with no transform attribute for animated transform */
+    .nd, .hub-g, .pulse-g { transform-box: fill-box; transform-origin: center; }
 
-    .l1 { animation: l1 12s ease-in-out infinite; }
-    .l2 { animation: l2 12s ease-in-out infinite; }
-    .l3 { animation: l3 12s ease-in-out infinite; }
-    .l4 { animation: l4 12s ease-in-out infinite; }
-    .l5 { animation: l5 12s ease-in-out infinite; }
-    .n1 { animation: n1 12s ease-in-out infinite; }
-    .n2 { animation: n2 12s ease-in-out infinite; }
-    .n3 { animation: n3 12s ease-in-out infinite; }
-    .n4 { animation: n4 12s ease-in-out infinite; }
-    .n5 { animation: n5 12s ease-in-out infinite; }
+    /* entrance, plays once, ~4s total */
+    @keyframes draw { 0% { stroke-dashoffset: 155; } 100% { stroke-dashoffset: 0; } }
+    @keyframes pop { 0% { opacity: 0; transform: scale(.7); } 100% { opacity: 1; transform: scale(1); } }
+    .s1 { animation: draw .5s ease-out .3s both; }
+    .s2 { animation: draw .5s ease-out .9s both; }
+    .s3 { animation: draw .5s ease-out 1.5s both; }
+    .s4 { animation: draw .5s ease-out 2.1s both; }
+    .s5 { animation: draw .5s ease-out 2.7s both; }
+    .n1 { animation: pop .45s ease-out .65s both; }
+    .n2 { animation: pop .45s ease-out 1.25s both; }
+    .n3 { animation: pop .45s ease-out 1.85s both; }
+    .n4 { animation: pop .45s ease-out 2.45s both; }
+    .n5 { animation: pop .45s ease-out 3.05s both; }
 
-    @keyframes l1 { 0%, 1% { opacity: 0; transform: scaleX(0); } 9% { opacity: 1; transform: scaleX(1); } 90% { opacity: 1; transform: scaleX(1); } 96%, 100% { opacity: 0; transform: scaleX(0); } }
-    @keyframes l2 { 0%, 8% { opacity: 0; transform: scaleX(0); } 16% { opacity: 1; transform: scaleX(1); } 90% { opacity: 1; transform: scaleX(1); } 96%, 100% { opacity: 0; transform: scaleX(0); } }
-    @keyframes l3 { 0%, 15% { opacity: 0; transform: scaleX(0); } 23% { opacity: 1; transform: scaleX(1); } 90% { opacity: 1; transform: scaleX(1); } 96%, 100% { opacity: 0; transform: scaleX(0); } }
-    @keyframes l4 { 0%, 22% { opacity: 0; transform: scaleX(0); } 30% { opacity: 1; transform: scaleX(1); } 90% { opacity: 1; transform: scaleX(1); } 96%, 100% { opacity: 0; transform: scaleX(0); } }
-    @keyframes l5 { 0%, 29% { opacity: 0; transform: scaleX(0); } 38% { opacity: 1; transform: scaleX(1); } 90% { opacity: 1; transform: scaleX(1); } 96%, 100% { opacity: 0; transform: scaleX(0); } }
+    /* continuous loop, infinite, 12s cycle, delayed 4s so it starts after the entrance settles */
+    @keyframes dispatch {
+      0%, 2% { opacity: 0; stroke-dashoffset: 155; }
+      2.3% { opacity: 1; stroke-dashoffset: 155; }
+      10% { opacity: 1; stroke-dashoffset: 26; }
+      10.3%, 100% { opacity: 0; stroke-dashoffset: 26; }
+    }
+    .d1 { animation: dispatch 12s ease-in-out infinite 4s both; }
+    .d2 { animation: dispatch 12s ease-in-out infinite 5.56s both; }
+    .d3 { animation: dispatch 12s ease-in-out infinite 7.12s both; }
+    .d4 { animation: dispatch 12s ease-in-out infinite 8.68s both; }
 
-    @keyframes n1 { 0%, 4% { opacity: 0; transform: scale(.5); } 10% { opacity: 1; transform: scale(1); } 90% { opacity: 1; transform: scale(1); } 96%, 100% { opacity: 0; transform: scale(.5); } }
-    @keyframes n2 { 0%, 11% { opacity: 0; transform: scale(.5); } 17% { opacity: 1; transform: scale(1); } 90% { opacity: 1; transform: scale(1); } 96%, 100% { opacity: 0; transform: scale(.5); } }
-    @keyframes n3 { 0%, 18% { opacity: 0; transform: scale(.5); } 24% { opacity: 1; transform: scale(1); } 90% { opacity: 1; transform: scale(1); } 96%, 100% { opacity: 0; transform: scale(.5); } }
-    @keyframes n4 { 0%, 25% { opacity: 0; transform: scale(.5); } 31% { opacity: 1; transform: scale(1); } 90% { opacity: 1; transform: scale(1); } 96%, 100% { opacity: 0; transform: scale(.5); } }
-    @keyframes n5 { 0%, 33% { opacity: 0; transform: scale(.5); } 40% { opacity: 1; transform: scale(1); } 90% { opacity: 1; transform: scale(1); } 96%, 100% { opacity: 0; transform: scale(.5); } }
+    @keyframes review-pulse {
+      0%, 60% { opacity: 0; transform: scale(1); }
+      60.3% { opacity: .6; transform: scale(1); }
+      72% { opacity: 0; transform: scale(1.8); }
+      100% { opacity: 0; transform: scale(1); }
+    }
+    .pulse-g { animation: review-pulse 12s ease-in-out infinite 4s both; }
 
-    @keyframes pulse { 0%, 42% { opacity: 0; transform: scale(.9); } 50% { opacity: .5; transform: scale(2.2); } 60%, 100% { opacity: 0; transform: scale(4.4); } }
-    @keyframes beat { 0%, 62% { transform: scale(1); } 66% { transform: scale(1.09); } 71%, 100% { transform: scale(1); } }
+    @keyframes beat {
+      0%, 76% { transform: scale(1); }
+      80% { transform: scale(1.06); }
+      84%, 100% { transform: scale(1); }
+    }
+    .hub-g { animation: beat 12s ease-in-out infinite 4s; }
 
     @media (prefers-reduced-motion: reduce) {
-      .l1, .l2, .l3, .l4, .l5, .n1, .n2, .n3, .n4, .n5, .pulse-g, .hub-g { animation: none !important; }
-      .l1, .l2, .l3, .l4, .l5 { opacity: 1; transform: scaleX(1); }
-      .n1, .n2, .n3, .n4, .n5 { opacity: 1; transform: scale(1); }
-      .pulse-g { opacity: 0; }
-      .hub-g { transform: scale(1); }
+      .s1, .s2, .s3, .s4, .s5, .n1, .n2, .n3, .n4, .n5, .d1, .d2, .d3, .d4, .pulse-g, .hub-g { animation: none !important; }
+      .co-line { stroke-dashoffset: 0; }
+      .nd { opacity: 1; transform: none; }
+      .co-dispatch, .co-pulse { opacity: 0; }
+      .hub-g { transform: none; }
     }
   </style>
 
-  <!-- connecting lines, drawn from the hub outward -->
-  <g transform="translate(360,220) rotate(-90)"><line class="co-line ln l1" x1="0" y1="0" x2="155" y2="0" /></g>
-  <g transform="translate(360,220) rotate(-18)"><line class="co-line ln l2" x1="0" y1="0" x2="155" y2="0" /></g>
-  <g transform="translate(360,220) rotate(54)"><line class="co-line ln l3" x1="0" y1="0" x2="155" y2="0" /></g>
-  <g transform="translate(360,220) rotate(126)"><line class="co-line ln l4" x1="0" y1="0" x2="155" y2="0" /></g>
-  <g transform="translate(360,220) rotate(198)"><line class="co-line ln l5" x1="0" y1="0" x2="155" y2="0" /></g>
-
-  <!-- review pulse, ripples outward from the hub -->
-  <g class="pulse-g" transform="translate(360,220)">
-    <circle class="co-pulse" cx="0" cy="0" r="34" />
+  <!-- spokes: static rotated outer g for position, base line draws once, overlay dispatch dash pulses forever -->
+  <g transform="translate(360,220) rotate(-90)">
+    <line class="co-line s1" x1="0" y1="0" x2="155" y2="0" />
+    <line class="co-dispatch d1" x1="0" y1="0" x2="155" y2="0" />
+  </g>
+  <g transform="translate(360,220) rotate(-18)">
+    <line class="co-line s2" x1="0" y1="0" x2="155" y2="0" />
+    <line class="co-dispatch d2" x1="0" y1="0" x2="155" y2="0" />
+  </g>
+  <g transform="translate(360,220) rotate(54)">
+    <line class="co-line s3" x1="0" y1="0" x2="155" y2="0" />
+    <line class="co-dispatch d3" x1="0" y1="0" x2="155" y2="0" />
+  </g>
+  <g transform="translate(360,220) rotate(126)">
+    <line class="co-line s4" x1="0" y1="0" x2="155" y2="0" />
+    <line class="co-dispatch d4" x1="0" y1="0" x2="155" y2="0" />
+  </g>
+  <g transform="translate(360,220) rotate(198)">
+    <line class="co-line s5" x1="0" y1="0" x2="155" y2="0" />
   </g>
 
-  <!-- specialist nodes 01-04 -->
-  <g class="nd n1" transform="translate(360,65)">
-    <circle class="co-node-fill co-node-stroke" r="24" />
-    <text class="co-num" x="0" y="0" text-anchor="middle" dominant-baseline="central">01</text>
+  <!-- specialist nodes 01-04: static outer g for position, plain inner g carries the entrance animation -->
+  <g transform="translate(360,65)">
+    <g class="nd n1">
+      <circle class="co-node-fill co-node-stroke" r="24" />
+      <text class="co-num" x="0" y="0" text-anchor="middle" dominant-baseline="central">01</text>
+    </g>
   </g>
-  <g class="nd n2" transform="translate(507,172)">
-    <circle class="co-node-fill co-node-stroke" r="24" />
-    <text class="co-num" x="0" y="0" text-anchor="middle" dominant-baseline="central">02</text>
+  <g transform="translate(507,172)">
+    <g class="nd n2">
+      <circle class="co-node-fill co-node-stroke" r="24" />
+      <text class="co-num" x="0" y="0" text-anchor="middle" dominant-baseline="central">02</text>
+    </g>
   </g>
-  <g class="nd n3" transform="translate(451,345)">
-    <circle class="co-node-fill co-node-stroke" r="24" />
-    <text class="co-num" x="0" y="0" text-anchor="middle" dominant-baseline="central">03</text>
+  <g transform="translate(451,345)">
+    <g class="nd n3">
+      <circle class="co-node-fill co-node-stroke" r="24" />
+      <text class="co-num" x="0" y="0" text-anchor="middle" dominant-baseline="central">03</text>
+    </g>
   </g>
-  <g class="nd n4" transform="translate(269,345)">
-    <circle class="co-node-fill co-node-stroke" r="24" />
-    <text class="co-num" x="0" y="0" text-anchor="middle" dominant-baseline="central">04</text>
+  <g transform="translate(269,345)">
+    <g class="nd n4">
+      <circle class="co-node-fill co-node-stroke" r="24" />
+      <text class="co-num" x="0" y="0" text-anchor="middle" dominant-baseline="central">04</text>
+    </g>
   </g>
 
   <!-- reviewer node, dashed to read as distinct and read-only -->
-  <g class="nd n5" transform="translate(213,172)">
-    <circle class="co-node-fill co-node-stroke-dashed" r="24" />
-    <text class="co-num" x="0" y="0" text-anchor="middle" dominant-baseline="central">R</text>
+  <g transform="translate(213,172)">
+    <g class="nd n5">
+      <circle class="co-node-fill co-node-stroke-dashed" r="24" />
+      <text class="co-num" x="0" y="0" text-anchor="middle" dominant-baseline="central">R</text>
+    </g>
   </g>
 
-  <!-- orchestrator hub -->
-  <g class="hub-g" transform="translate(360,220)">
-    <circle class="co-hub" r="34" />
+  <!-- review pulse: ripple ring at the reviewer position, fires once per loop -->
+  <g transform="translate(213,172)">
+    <g class="pulse-g">
+      <circle class="co-pulse" r="24" />
+    </g>
+  </g>
+
+  <!-- orchestrator hub, always visible, gets a subtle integrate beat in the loop -->
+  <g transform="translate(360,220)">
+    <g class="hub-g">
+      <circle class="co-hub" r="34" />
+    </g>
   </g>
 
   <text class="co-cap" x="360" y="276" text-anchor="middle">claude code &#183; orchestrator</text>

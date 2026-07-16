@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="docs/assets/hero.svg" alt="Animated diagram: a central orchestrator node draws lines out to four specialist nodes and one reviewer node, which assemble one at a time, followed by a review pulse and an integrate beat, then the organization holds fully assembled before the cycle repeats" width="560" />
+<img src="docs/assets/hero.svg" alt="Animated diagram: a central orchestrator draws lines out to four numbered specialist nodes and one dashed reviewer node, which assemble once and stay in place while teal pulses show work being dispatched, reviewed, and integrated in a continuous loop" width="560" />
 
 # Cohort
 
