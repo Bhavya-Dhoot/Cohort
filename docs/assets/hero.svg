@@ -1,0 +1,102 @@
+<svg viewBox="0 0 720 460" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Animated diagram: a central orchestrator node draws connecting lines out to four specialist nodes and one reviewer node, which fade and scale in one at a time, followed by a review pulse and an integrate beat, then the organization holds fully assembled before the cycle repeats">
+  <style>
+    .co-line { stroke: #8A8F98; stroke-width: 2; fill: none; }
+    .co-node-fill { fill: #FBFBFA; }
+    .co-node-stroke { stroke: #8A8F98; stroke-width: 1.8; fill: none; }
+    .co-node-stroke-dashed { stroke: #8A8F98; stroke-width: 1.8; fill: none; stroke-dasharray: 3 3; }
+    .co-hub { fill: #0F766E; }
+    .co-pulse { stroke: #0F766E; stroke-width: 1.6; fill: none; }
+    .co-num { fill: #5B6470; font-family: "Geist Mono", "JetBrains Mono", "SF Mono", ui-monospace, monospace; font-size: 14px; }
+    .co-cap { fill: #5B6470; font-family: "Geist Mono", "JetBrains Mono", "SF Mono", ui-monospace, monospace; font-size: 12px; letter-spacing: 0.02em; }
+    @media (prefers-color-scheme: dark) {
+      .co-node-fill { fill: #141618; }
+      .co-num { fill: #B8BCC0; }
+      .co-cap { fill: #B8BCC0; }
+      .co-hub { fill: #2DD4BF; }
+      .co-pulse { stroke: #2DD4BF; }
+    }
+
+    .ln { transform-box: fill-box; transform-origin: 0 0; }
+    .nd { transform-box: fill-box; transform-origin: center; }
+    .hub-g { transform-box: fill-box; transform-origin: center; animation: beat 12s ease-in-out infinite; }
+    .pulse-g { transform-box: fill-box; transform-origin: center; animation: pulse 12s ease-in-out infinite; }
+
+    .l1 { animation: l1 12s ease-in-out infinite; }
+    .l2 { animation: l2 12s ease-in-out infinite; }
+    .l3 { animation: l3 12s ease-in-out infinite; }
+    .l4 { animation: l4 12s ease-in-out infinite; }
+    .l5 { animation: l5 12s ease-in-out infinite; }
+    .n1 { animation: n1 12s ease-in-out infinite; }
+    .n2 { animation: n2 12s ease-in-out infinite; }
+    .n3 { animation: n3 12s ease-in-out infinite; }
+    .n4 { animation: n4 12s ease-in-out infinite; }
+    .n5 { animation: n5 12s ease-in-out infinite; }
+
+    @keyframes l1 { 0%, 1% { opacity: 0; transform: scaleX(0); } 9% { opacity: 1; transform: scaleX(1); } 90% { opacity: 1; transform: scaleX(1); } 96%, 100% { opacity: 0; transform: scaleX(0); } }
+    @keyframes l2 { 0%, 8% { opacity: 0; transform: scaleX(0); } 16% { opacity: 1; transform: scaleX(1); } 90% { opacity: 1; transform: scaleX(1); } 96%, 100% { opacity: 0; transform: scaleX(0); } }
+    @keyframes l3 { 0%, 15% { opacity: 0; transform: scaleX(0); } 23% { opacity: 1; transform: scaleX(1); } 90% { opacity: 1; transform: scaleX(1); } 96%, 100% { opacity: 0; transform: scaleX(0); } }
+    @keyframes l4 { 0%, 22% { opacity: 0; transform: scaleX(0); } 30% { opacity: 1; transform: scaleX(1); } 90% { opacity: 1; transform: scaleX(1); } 96%, 100% { opacity: 0; transform: scaleX(0); } }
+    @keyframes l5 { 0%, 29% { opacity: 0; transform: scaleX(0); } 38% { opacity: 1; transform: scaleX(1); } 90% { opacity: 1; transform: scaleX(1); } 96%, 100% { opacity: 0; transform: scaleX(0); } }
+
+    @keyframes n1 { 0%, 4% { opacity: 0; transform: scale(.5); } 10% { opacity: 1; transform: scale(1); } 90% { opacity: 1; transform: scale(1); } 96%, 100% { opacity: 0; transform: scale(.5); } }
+    @keyframes n2 { 0%, 11% { opacity: 0; transform: scale(.5); } 17% { opacity: 1; transform: scale(1); } 90% { opacity: 1; transform: scale(1); } 96%, 100% { opacity: 0; transform: scale(.5); } }
+    @keyframes n3 { 0%, 18% { opacity: 0; transform: scale(.5); } 24% { opacity: 1; transform: scale(1); } 90% { opacity: 1; transform: scale(1); } 96%, 100% { opacity: 0; transform: scale(.5); } }
+    @keyframes n4 { 0%, 25% { opacity: 0; transform: scale(.5); } 31% { opacity: 1; transform: scale(1); } 90% { opacity: 1; transform: scale(1); } 96%, 100% { opacity: 0; transform: scale(.5); } }
+    @keyframes n5 { 0%, 33% { opacity: 0; transform: scale(.5); } 40% { opacity: 1; transform: scale(1); } 90% { opacity: 1; transform: scale(1); } 96%, 100% { opacity: 0; transform: scale(.5); } }
+
+    @keyframes pulse { 0%, 42% { opacity: 0; transform: scale(.9); } 50% { opacity: .5; transform: scale(2.2); } 60%, 100% { opacity: 0; transform: scale(4.4); } }
+    @keyframes beat { 0%, 62% { transform: scale(1); } 66% { transform: scale(1.09); } 71%, 100% { transform: scale(1); } }
+
+    @media (prefers-reduced-motion: reduce) {
+      .l1, .l2, .l3, .l4, .l5, .n1, .n2, .n3, .n4, .n5, .pulse-g, .hub-g { animation: none !important; }
+      .l1, .l2, .l3, .l4, .l5 { opacity: 1; transform: scaleX(1); }
+      .n1, .n2, .n3, .n4, .n5 { opacity: 1; transform: scale(1); }
+      .pulse-g { opacity: 0; }
+      .hub-g { transform: scale(1); }
+    }
+  </style>
+
+  <!-- connecting lines, drawn from the hub outward -->
+  <g transform="translate(360,220) rotate(-90)"><line class="co-line ln l1" x1="0" y1="0" x2="155" y2="0" /></g>
+  <g transform="translate(360,220) rotate(-18)"><line class="co-line ln l2" x1="0" y1="0" x2="155" y2="0" /></g>
+  <g transform="translate(360,220) rotate(54)"><line class="co-line ln l3" x1="0" y1="0" x2="155" y2="0" /></g>
+  <g transform="translate(360,220) rotate(126)"><line class="co-line ln l4" x1="0" y1="0" x2="155" y2="0" /></g>
+  <g transform="translate(360,220) rotate(198)"><line class="co-line ln l5" x1="0" y1="0" x2="155" y2="0" /></g>
+
+  <!-- review pulse, ripples outward from the hub -->
+  <g class="pulse-g" transform="translate(360,220)">
+    <circle class="co-pulse" cx="0" cy="0" r="34" />
+  </g>
+
+  <!-- specialist nodes 01-04 -->
+  <g class="nd n1" transform="translate(360,65)">
+    <circle class="co-node-fill co-node-stroke" r="24" />
+    <text class="co-num" x="0" y="0" text-anchor="middle" dominant-baseline="central">01</text>
+  </g>
+  <g class="nd n2" transform="translate(507,172)">
+    <circle class="co-node-fill co-node-stroke" r="24" />
+    <text class="co-num" x="0" y="0" text-anchor="middle" dominant-baseline="central">02</text>
+  </g>
+  <g class="nd n3" transform="translate(451,345)">
+    <circle class="co-node-fill co-node-stroke" r="24" />
+    <text class="co-num" x="0" y="0" text-anchor="middle" dominant-baseline="central">03</text>
+  </g>
+  <g class="nd n4" transform="translate(269,345)">
+    <circle class="co-node-fill co-node-stroke" r="24" />
+    <text class="co-num" x="0" y="0" text-anchor="middle" dominant-baseline="central">04</text>
+  </g>
+
+  <!-- reviewer node, dashed to read as distinct and read-only -->
+  <g class="nd n5" transform="translate(213,172)">
+    <circle class="co-node-fill co-node-stroke-dashed" r="24" />
+    <text class="co-num" x="0" y="0" text-anchor="middle" dominant-baseline="central">R</text>
+  </g>
+
+  <!-- orchestrator hub -->
+  <g class="hub-g" transform="translate(360,220)">
+    <circle class="co-hub" r="34" />
+  </g>
+
+  <text class="co-cap" x="360" y="276" text-anchor="middle">claude code &#183; orchestrator</text>
+  <text class="co-cap" x="360" y="432" text-anchor="middle">objective in &#8594; org out</text>
+</svg>
