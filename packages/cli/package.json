@@ -1,5 +1,5 @@
 {
-  "name": "cohort",
+  "name": "@bhavya-dhoot/cohort",
   "version": "0.1.0",
   "description": "Autonomous AI software-engineering organization for Claude Code + OpenCode",
   "keywords": [
@@ -41,6 +41,6 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@cohort/core": "^0.1.0"
+    "@bhavya-dhoot/cohort-core": "^0.1.0"
   }
 }

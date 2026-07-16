@@ -1,5 +1,5 @@
 {
-  "name": "@cohort/core",
+  "name": "@bhavya-dhoot/cohort-core",
   "version": "0.1.0",
   "description": "Core orchestration engine for Cohort: spawns and manages OpenCode implementation workers in isolated git worktrees, exposed as an MCP server",
   "keywords": [

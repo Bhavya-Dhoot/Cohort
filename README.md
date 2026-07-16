@@ -34,7 +34,7 @@ Prerequisites: [Claude Code CLI](https://claude.com/claude-code), the
 [OpenCode CLI](https://opencode.ai), and Node.js >= 22.
 
 ```bash
-npm i -g cohort
+npm i -g @bhavya-dhoot/cohort
 cohort login    # verifies Claude + OpenCode + provider auth, never stores secrets
 cohort init     # scaffolds .cohort/ config and registers the Claude Code plugin
 cohort run "Build a small Node utility library with a config loader and a validator"

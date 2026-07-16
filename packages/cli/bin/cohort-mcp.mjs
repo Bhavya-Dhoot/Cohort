@@ -7,4 +7,4 @@
 // where .mcp.json invokes it via `node <path>`). Rather than add a shebang
 // inside packages/core/src (out of this package's ownership), this wrapper
 // — which packages/cli does own — just imports it for its side effects.
-import "@cohort/core/mcp/bin.js";
+import "@bhavya-dhoot/cohort-core/mcp/bin.js";
