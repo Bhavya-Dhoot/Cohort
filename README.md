@@ -144,6 +144,20 @@ Verification never trusts a worker's self-report; it runs real commands
 against the worktree diff. Reviewers are read-only. No secrets are stored;
 authentication goes through each provider's own login flow.
 
+## The operator's guide
+
+The README covers what Cohort is. The operator's guide covers running it: the
+full lifecycle from `plan_submit` to `integrate_batch`, what each of the 18 MCP
+tools is actually for, the budget tiers and why `next_batch` refuses to start
+work at the hard cap, replan limits and forced escalation, and a set of
+operational gotchas this README does not mention — including why a detached HEAD
+breaks `spawn_worker` outright.
+
+**[Cohort: The Operator's Guide](https://bhavyadhoot.gumroad.com/l/cohort-operators-guide)** — 9 pages, $19.
+
+Cohort itself stays free and MIT. The guide is documentation, not a licence:
+nothing here is gated behind it.
+
 ## License
 
 [MIT](LICENSE)
@@ -152,6 +166,6 @@ authentication goes through each provider's own login flow.
 
 <div align="center">
 
-[Repository](https://github.com/Bhavya-Dhoot/Cohort) &middot; [npm](https://www.npmjs.com/package/@bhavya-dhoot/cohort) &middot; [Site](https://bhavya-dhoot.github.io/Cohort/)
+[Repository](https://github.com/Bhavya-Dhoot/Cohort) &middot; [npm](https://www.npmjs.com/package/@bhavya-dhoot/cohort) &middot; [Site](https://bhavya-dhoot.github.io/Cohort/) &middot; [Operator's Guide](https://bhavyadhoot.gumroad.com/l/cohort-operators-guide)
 
 </div>
